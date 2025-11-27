@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+venv/
+env/
+ENV/
+.env
+.venv/
+
+# VS Code
+.vscode/
+
+# Selenium / WebDrivers
+*.log
+msedgedriver.exe
+geckodriver.exe
+chromedriver.exe
+
+# Project specific
+# Ignore generated PDFs and Excel files if they are saved in root (though config says C:\Liverpool\auto)
+*.pdf
+*.xlsx
+*.png
+
+# OS
+.DS_Store
+Thumbs.db
