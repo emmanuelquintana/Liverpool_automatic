@@ -1,34 +1,22 @@
 # view.py
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import filedialog, messagebox
+import customtkinter as ctk
 from pathlib import Path
 
 from models import AppConfig
 from viewmodel import LiverpoolViewModel
 
+# Configuración global de CustomTkinter
+ctk.set_appearance_mode("Dark")  # Modes: "System" (standard), "Dark", "Light"
+ctk.set_default_color_theme("dark-blue")  # Themes: "blue" (standard), "green", "dark-blue"
 
-class LiverpoolApp(tk.Tk):
+
+class LiverpoolApp(ctk.CTk):
     def __init__(self, config: AppConfig):
         super().__init__()
         self.title("Liverpool Orders - Fase 1 (Dry-run)")
-        self.geometry("900x600")
-
-        # Estilo dark + azul
-        self.configure(bg="#121212")
-        style = ttk.Style(self)
-        style.theme_use("clam")
-        style.configure("TFrame", background="#121212")
-        style.configure("TLabel", background="#121212", foreground="#f5f5f5")
-        style.configure(
-            "TButton", background="#0d6efd", foreground="#ffffff", padding=6
-        )
-        style.map("TButton", background=[("active", "#1d7ffd")])
-        style.configure(
-            "Treeview",
-            background="#1e1e1e",
-            foreground="#f5f5f5",
-            fieldbackground="#1e1e1e",
-        )
+        self.geometry("1000x750")
 
         self.config_obj = config
         self.vm = LiverpoolViewModel(self.config_obj)
@@ -39,82 +27,135 @@ class LiverpoolApp(tk.Tk):
         self._build_ui()
 
     def _build_ui(self):
-        main_frame = ttk.Frame(self)
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        # --- Layout Principal ---
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)  # El contenido principal se expande
 
-        # Arriba: config base dir
-        top_frame = ttk.Frame(main_frame)
-        top_frame.pack(fill=tk.X)
+        # 1. Header / Configuración
+        self.header_frame = ctk.CTkFrame(self, corner_radius=10)
+        self.header_frame.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 10))
+        self.header_frame.grid_columnconfigure(1, weight=1)
 
-        ttk.Label(top_frame, text="Carpeta base:").grid(row=0, column=0, sticky="w")
+        self.lbl_base_dir = ctk.CTkLabel(
+            self.header_frame, text="Carpeta Base:", font=("Roboto Medium", 14)
+        )
+        self.lbl_base_dir.grid(row=0, column=0, padx=15, pady=15)
+
         self.base_dir_var = tk.StringVar(value=str(self.config_obj.base_dir))
-        self.base_dir_entry = ttk.Entry(
-            top_frame, textvariable=self.base_dir_var, width=60
+        self.entry_base_dir = ctk.CTkEntry(
+            self.header_frame, textvariable=self.base_dir_var, height=35
         )
-        self.base_dir_entry.grid(row=0, column=1, sticky="we", padx=5)
-        btn_browse = ttk.Button(
-            top_frame, text="Elegir...", command=self.choose_base_dir
+        self.entry_base_dir.grid(row=0, column=1, sticky="ew", padx=10)
+
+        self.btn_browse = ctk.CTkButton(
+            self.header_frame,
+            text="Elegir...",
+            command=self.choose_base_dir,
+            width=100,
+            height=35,
         )
-        btn_browse.grid(row=0, column=2, padx=5)
+        self.btn_browse.grid(row=0, column=2, padx=15)
 
-        top_frame.columnconfigure(1, weight=1)
+        # 2. Panel Central (Botones + Fechas)
+        self.center_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.center_frame.grid(row=1, column=0, sticky="nsew", padx=20, pady=5)
+        self.center_frame.grid_columnconfigure(0, weight=1)
+        self.center_frame.grid_columnconfigure(1, weight=1)
+        self.center_frame.grid_rowconfigure(0, weight=1)
 
-        # Botones principales
-        btn_frame = ttk.Frame(main_frame)
-        btn_frame.pack(fill=tk.X, pady=10)
+        # 2.1 Columna Izquierda: Acciones
+        self.actions_frame = ctk.CTkFrame(self.center_frame, corner_radius=10)
+        self.actions_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        self.actions_frame.grid_columnconfigure(0, weight=1)
 
-        btn_scan = ttk.Button(
-            btn_frame,
-            text="1) Escanear pedidos en /orders (dry-run)",
+        ctk.CTkLabel(
+            self.actions_frame, text="Acciones", font=("Roboto Medium", 16)
+        ).pack(pady=(15, 10))
+
+        # Botones de acción con estilo
+        btn_params = {"height": 40, "font": ("Roboto", 13), "corner_radius": 8}
+
+        self.btn_scan = ctk.CTkButton(
+            self.actions_frame,
+            text="1) Escanear Pedidos (Dry-run)",
             command=self.on_scan_click,
+            fg_color="#2ecc71",
+            hover_color="#27ae60",
+            **btn_params
         )
-        btn_scan.grid(row=0, column=0, padx=5, pady=5, sticky="w")
+        self.btn_scan.pack(fill="x", padx=20, pady=10)
 
-        btn_process = ttk.Button(
-            btn_frame,
-            text="2) Procesar detalles y generar archivos",
+        self.btn_process = ctk.CTkButton(
+            self.actions_frame,
+            text="2) Procesar Detalles",
             command=self.on_process_click,
+            fg_color="#3498db",
+            hover_color="#2980b9",
+            **btn_params
         )
-        btn_process.grid(row=0, column=1, padx=5, pady=5, sticky="w")
+        self.btn_process.pack(fill="x", padx=20, pady=10)
 
-        btn_accept = ttk.Button(
-            btn_frame,
-            text="3) Aceptar pedidos y descargar guías",
+        self.btn_accept = ctk.CTkButton(
+            self.actions_frame,
+            text="3) Aceptar y Descargar Guías",
             command=self.on_accept_click,
+            fg_color="#e67e22",
+            hover_color="#d35400",
+            **btn_params
         )
-        
-        btn_merge = ttk.Button(
-            btn_frame,
-            text="4) Unir guías PDF (reintentar)",
+        self.btn_accept.pack(fill="x", padx=20, pady=10)
+
+        self.btn_merge = ctk.CTkButton(
+            self.actions_frame,
+            text="4) Unir Guías PDF",
             command=self.on_merge_click,
+            fg_color="#9b59b6",
+            hover_color="#8e44ad",
+            **btn_params
         )
-        btn_merge.grid(row=0, column=3, padx=5, pady=5, sticky="w")
-        btn_accept.grid(row=0, column=2, padx=5, pady=5, sticky="w")
-        # Centro: fechas
-        mid_frame = ttk.Frame(main_frame)
-        mid_frame.pack(fill=tk.BOTH, expand=True)
+        self.btn_merge.pack(fill="x", padx=20, pady=10)
 
-        ttk.Label(
-            mid_frame,
-            text="Fechas con pedidos 'Pendiente de aceptación':",
-        ).pack(anchor="w")
+        # 2.2 Columna Derecha: Fechas
+        self.dates_container = ctk.CTkFrame(self.center_frame, corner_radius=10)
+        self.dates_container.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+        self.dates_container.grid_rowconfigure(1, weight=1)
+        self.dates_container.grid_columnconfigure(0, weight=1)
 
-        self.dates_frame = ttk.Frame(mid_frame)
-        self.dates_frame.pack(fill=tk.X, pady=5)
+        ctk.CTkLabel(
+            self.dates_container,
+            text="Fechas con Pendientes",
+            font=("Roboto Medium", 16),
+        ).grid(row=0, column=0, pady=(15, 10))
 
-        # Abajo: log
-        log_frame = ttk.Frame(main_frame)
-        log_frame.pack(fill=tk.BOTH, expand=True, pady=10)
-
-        ttk.Label(log_frame, text="Log:").pack(anchor="w")
-        self.log_text = tk.Text(
-            log_frame,
-            height=15,
-            bg="#1e1e1e",
-            fg="#f5f5f5",
-            insertbackground="#f5f5f5",
+        # Scrollable Frame para las fechas
+        self.dates_scroll_frame = ctk.CTkScrollableFrame(
+            self.dates_container, label_text="Selecciona fechas"
         )
-        self.log_text.pack(fill=tk.BOTH, expand=True)
+        self.dates_scroll_frame.grid(
+            row=1, column=0, sticky="nsew", padx=15, pady=(0, 15)
+        )
+
+        # 3. Log (Abajo)
+        self.log_frame = ctk.CTkFrame(self, corner_radius=10)
+        self.log_frame.grid(row=2, column=0, sticky="nsew", padx=20, pady=10)
+        self.log_frame.grid_rowconfigure(1, weight=1)
+        self.log_frame.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            self.log_frame, text="Registro de Actividad", font=("Roboto Medium", 14)
+        ).grid(row=0, column=0, sticky="w", padx=15, pady=(10, 5))
+
+        self.log_text = ctk.CTkTextbox(self.log_frame, height=150, font=("Consolas", 12))
+        self.log_text.grid(row=1, column=0, sticky="nsew", padx=15, pady=(0, 15))
+
+        # 4. Footer / Créditos
+        self.footer_label = ctk.CTkLabel(
+            self,
+            text="Desarrollado por Jose Emmanuel Quintana Torres",
+            font=("Roboto", 10),
+            text_color="gray",
+        )
+        self.footer_label.grid(row=3, column=0, pady=(0, 10))
 
     def choose_base_dir(self):
         folder = filedialog.askdirectory(
@@ -128,34 +169,39 @@ class LiverpoolApp(tk.Tk):
     def append_log(self, msg: str):
         self.log_text.insert(tk.END, msg + "\n")
         self.log_text.see(tk.END)
-        self.update_idletasks()
+        # No es necesario update_idletasks() tan agresivo en ctk, pero mal no hace
+        # self.update_idletasks()
 
     def refresh_dates_checkboxes(self):
-        for w in self.dates_frame.winfo_children():
-            w.destroy()
+        # Limpiar widgets anteriores en el scroll frame
+        for widget in self.dates_scroll_frame.winfo_children():
+            widget.destroy()
         self.selected_dates_vars.clear()
 
         dates_summary = self.vm.get_dates_summary()
         if not dates_summary:
-            ttk.Label(
-                self.dates_frame,
-                text="(No hay fechas con pendientes por ahora)",
-            ).pack(anchor="w")
+            ctk.CTkLabel(
+                self.dates_scroll_frame,
+                text="(No hay fechas con pendientes)",
+                text_color="gray",
+            ).pack(anchor="w", pady=5)
             return
 
         for fecha, count in dates_summary:
-            var = tk.BooleanVar(value=False)
-            cb = ttk.Checkbutton(
-                self.dates_frame,
+            var = ctk.BooleanVar(value=False)
+            cb = ctk.CTkCheckBox(
+                self.dates_scroll_frame,
                 text=f"{fecha}  →  {count} pedidos",
                 variable=var,
             )
-            cb.pack(anchor="w")
+            cb.pack(anchor="w", pady=5)
             self.selected_dates_vars[fecha] = var
 
     def on_scan_click(self):
         try:
             self.append_log("=== Iniciando escaneo ===")
+            # Ejecutar en un hilo o after para no congelar UI sería ideal,
+            # pero mantenemos lógica simple como se pidió.
             self.vm.scan_orders()
             self.refresh_dates_checkboxes()
             self.append_log("=== Escaneo terminado ===")
@@ -182,9 +228,7 @@ class LiverpoolApp(tk.Tk):
                 "Listo", "Fase 1 completada. Revisa las carpetas por día."
             )
         except Exception as e:
-            messagebox.showerror(
-                "Error", f"Error procesando detalles: {e}"
-            )
+            messagebox.showerror("Error", f"Error procesando detalles: {e}")
 
     def on_accept_click(self):
         selected_dates = [
@@ -230,6 +274,4 @@ class LiverpoolApp(tk.Tk):
                 "Fase 3 completada. Revisa los PDF GUIAS_<fecha>.pdf y los TXT de faltantes.",
             )
         except Exception as e:
-            messagebox.showerror(
-                "Error", f"Error uniendo guías: {e}"
-            )
+            messagebox.showerror("Error", f"Error uniendo guías: {e}")
