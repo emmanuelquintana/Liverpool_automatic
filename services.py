@@ -741,7 +741,7 @@ class LiverpoolService:
                     )
 
                 self.log("  [INFO F2] Esperando a que se procese el pedido...")
-                time.sleep(10)
+                time.sleep(5)
 
             except Exception as e:
                 self.log(f"  [WARN F2] Error al intentar aceptar el pedido: {e}")
