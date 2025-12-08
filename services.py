@@ -7,6 +7,7 @@ import shutil
 from pathlib import Path
 from typing import Dict, List, Callable, Optional
 
+from PIL import Image  # Para convertir GIF a PDF
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.edge.service import Service as EdgeService
@@ -560,6 +561,9 @@ class LiverpoolService:
                     except Exception as e:
                         self.log(f"  [ERROR F2] Pedido {order.order_id}: {e}")
 
+                # Reintentar guías faltantes (1 vez)
+                self._retry_missing_guides(batch, day_dir, driver)
+
                 # Unir todas las guías de este día en un solo PDF (usando el orden de batch.orders)
                 self._merge_labels_for_day(batch, day_dir, phase_label="F2")
 
@@ -590,7 +594,76 @@ class LiverpoolService:
 
             day_dir = self.config.base_dir / date
             self.log(f"\n=== Fase 3: Unir guías para el día {date} ===")
+            
+            # Reintentar guías faltantes antes de unir
+            # Nota: Esto abrirá navegador si hay faltantes
+            self._retry_missing_guides(batch, day_dir, driver=None)
+            
             self._merge_labels_for_day(batch, day_dir, phase_label="F3")
+
+    def _retry_missing_guides(
+        self,
+        batch: DayBatch,
+        day_dir: Path,
+        driver: Optional[webdriver.Edge] = None,
+    ):
+        """
+        Identifica pedidos sin PDF en <day_dir>/guias y reintenta descargarlos.
+        Si 'driver' es None, se instancia uno nuevo (y se cierra al final).
+        """
+        guides_dir = day_dir / "guias"
+        if not guides_dir.exists():
+            guides_dir.mkdir(parents=True, exist_ok=True)
+
+        # Identificar faltantes
+        missing_orders = []
+        for order in batch.orders:
+            pdf_path = guides_dir / f"{order.order_id}.pdf"
+            if not pdf_path.exists():
+                missing_orders.append(order)
+
+        if not missing_orders:
+            self.log(f"  [INFO] No hay guías faltantes para {batch.date}. Todo completo.")
+            return
+
+        self.log(
+            f"  [INFO] Se detectaron {len(missing_orders)} pedidos sin guía. "
+            "Iniciando reintento..."
+        )
+
+        # Manejo del driver
+        local_driver = False
+        if driver is None:
+            self.log("  [INFO] Iniciando navegador para reintentos...")
+            driver = self._init_driver()
+            local_driver = True
+        
+        wait = WebDriverWait(driver, TIMEOUT)
+        download_dir: Path = getattr(
+            self.config,
+            "download_dir",
+            Path.home() / "Downloads",
+        )
+
+        try:
+            total = len(missing_orders)
+            for idx, order in enumerate(missing_orders, start=1):
+                self.log(f"  [RETRY] Procesando {order.order_id} ({idx}/{total})")
+                try:
+                    self._accept_and_download_for_order(
+                        driver=driver,
+                        wait=wait,
+                        order=order,
+                        day_dir=day_dir,
+                        download_dir=download_dir,
+                    )
+                except Exception as e:
+                    self.log(f"    [ERROR RETRY] Falló reintento de {order.order_id}: {e}")
+
+        finally:
+            if local_driver:
+                driver.quit()
+                self.log("  [INFO] Navegador de reintentos cerrado.")
 
     def _merge_labels_for_day(self, batch: DayBatch, day_dir: Path, phase_label: str = "F3"):
         guides_dir = day_dir / "guias"
@@ -638,20 +711,40 @@ class LiverpoolService:
         finally:
             merger.close()
 
-        # TXT con guías faltantes
+        # Excel con guías faltantes (en lugar de TXT)
         if missing_orders:
-            missing_path = day_dir / f"GUIAS_FALTANTES_{batch.date}.txt"
+            missing_path = day_dir / f"GUIAS_FALTANTES_{batch.date}.xlsx"
             try:
-                with open(missing_path, "w", encoding="utf-8") as f:
-                    for oid in missing_orders:
-                        f.write(str(oid) + "\n")
-            except Exception as e:
-                self.log(
-                    f"  [WARN {phase_label}] No se pudo escribir TXT de guías faltantes: {e}"
-                )
-            else:
+                wb_missing = Workbook()
+                ws_missing = wb_missing.active
+                ws_missing.title = "Faltantes"
+                ws_missing.append(["Pedido", "Link"])
+                
+                # Ajustar ancho de columnas
+                ws_missing.column_dimensions["A"].width = 20
+                ws_missing.column_dimensions["B"].width = 80
+
+                for oid in missing_orders:
+                    # Buscar el objeto order para obtener la URL
+                    # (aunque es un poco ineficiente buscarlo de nuevo, es seguro)
+                    found_order = next((o for o in batch.orders if o.order_id == oid), None)
+                    url = found_order.url if found_order else ""
+                    
+                    ws_missing.append([oid, url])
+                    
+                    # Hacer el link clickable
+                    if url:
+                        cell = ws_missing.cell(row=ws_missing.max_row, column=2)
+                        cell.hyperlink = url
+                        cell.style = "Hyperlink"
+
+                wb_missing.save(missing_path)
                 self.log(
                     f"  [INFO {phase_label}] Archivo de guías faltantes generado: {missing_path}"
+                )
+            except Exception as e:
+                self.log(
+                    f"  [WARN {phase_label}] No se pudo escribir Excel de guías faltantes: {e}"
                 )
         else:
             self.log(f"  [INFO {phase_label}] No hay pedidos sin PDF de guía en este día.")
@@ -703,13 +796,14 @@ class LiverpoolService:
                 "se asume pedido ya aceptado y se pasa directo a 'Documentos'."
             )
 
-        # Si no hay ni chip ni botón, lo consideramos no pendiente y terminamos
+        # Si no hay ni chip ni botón, asumimos que está en otro estado (ej. Pendiente de envío)
+        # y continuamos para intentar descargar la guía.
         if not chip_present and accept_btn is None:
             self.log(
-                "  [INFO F2] El pedido no tiene chip 'Pendiente de aceptación' "
-                "ni botón 'Aceptar'. Se omite para no romper."
+                "  [INFO F2] No hay chip 'Pendiente' ni botón 'Aceptar'. "
+                "Se asume 'Pendiente de envío' y se continúa a Documentos."
             )
-            return
+            # No hacemos return, dejamos que siga
 
         # Si hay botón, intentamos aceptar
         if accept_btn is not None:
@@ -723,7 +817,7 @@ class LiverpoolService:
 
                 # Si aparece un diálogo de confirmación, tratar de confirmarlo
                 try:
-                    confirm_btn = WebDriverWait(driver, 5).until(
+                    confirm_btn = WebDriverWait(driver, 2).until(
                         EC.element_to_be_clickable(
                             (
                                 By.XPATH,
@@ -741,7 +835,7 @@ class LiverpoolService:
                     )
 
                 self.log("  [INFO F2] Esperando a que se procese el pedido...")
-                time.sleep(5)
+                time.sleep(10)
 
             except Exception as e:
                 self.log(f"  [WARN F2] Error al intentar aceptar el pedido: {e}")
@@ -809,8 +903,9 @@ class LiverpoolService:
         guides_dir = day_dir / "guias"
         guides_dir.mkdir(parents=True, exist_ok=True)
 
-        # PDFs existentes antes del click
-        before_files = set(download_dir.glob("*.pdf"))
+        # PDFs o GIFs existentes antes del click
+        before_pdfs = set(download_dir.glob("*.pdf"))
+        before_gifs = set(download_dir.glob("*.gif"))
 
         try:
             # Fila cuyo tipo de documento es 'Etiqueta de Envío'
@@ -915,9 +1010,7 @@ class LiverpoolService:
                     "  [INFO F2] Click JS en botón de descarga dentro de la fila 'Etiqueta de Envío'."
                 )
             except Exception as e:
-                self.log(
-                    f"  [WARN F2] No se pudo hacer click en el botón de descarga: {e}"
-                )
+                self.log(f"  [WARN F2] Error al hacer click en botón de descarga: {e}")
                 return
 
         except Exception as e:
@@ -926,51 +1019,73 @@ class LiverpoolService:
             )
             return
 
-        # --- Esperar la descarga en la carpeta de descargas ---
-        try:
-            wait.until(
-                lambda d: len(set(download_dir.glob("*.pdf")) - before_files) > 0
-            )
-        except TimeoutException:
-            self.log(
-                "  [WARN F2] No se detectó PDF nuevo en la carpeta de descargas tras el click (timeout)."
-            )
+        # --- Esperar archivo nuevo (PDF o GIF) ---
+        # Aumentamos timeout a 20s por si tarda en generar
+        timeout = 20
+        end_time = time.time() + timeout
+        new_file = None
 
-        # Pequeño extra por si el archivo termina justo después del timeout / condición
-        time.sleep(2)
+        while time.time() < end_time:
+            current_pdfs = set(download_dir.glob("*.pdf"))
+            current_gifs = set(download_dir.glob("*.gif"))
 
-        after_files = set(download_dir.glob("*.pdf"))
-        new_pdfs = after_files - before_files
+            new_pdfs = current_pdfs - before_pdfs
+            new_gifs = current_gifs - before_gifs
 
-        if not new_pdfs:
-            self.log(
-                "  [WARN F2] No se detectó PDF nuevo después de hacer clic en la etiqueta."
-            )
+            if new_pdfs:
+                new_file = new_pdfs.pop()
+                break
+            if new_gifs:
+                new_file = new_gifs.pop()
+                break
+            time.sleep(1)
+
+        if not new_file:
+            self.log("  [WARN F2] No se detectó archivo nuevo (PDF o GIF) tras el click.")
             return
 
-        self.log(
-            f"  [INFO F2] PDFs nuevos detectados: {[p.name for p in new_pdfs]}"
-        )
-        latest_pdf = max(new_pdfs, key=lambda p: p.stat().st_mtime)
-        target = guides_dir / f"{order.order_id}.pdf"
+        # --- Procesar el archivo descargado ---
+        final_pdf_path = guides_dir / f"{order.order_id}.pdf"
+        
+        try:
+            # Esperar a que termine de descargarse (tamaño estable)
+            time.sleep(1.0) 
+            
+            # Si es GIF, convertir a PDF
+            if new_file.suffix.lower() == ".gif":
+                self.log(f"  [INFO F2] Se detectó guía en formato GIF: {new_file.name}")
+                try:
+                    with Image.open(new_file) as img:
+                        # Rotar 90 grados a la derecha (clockwise) -> 270 grados counter-clockwise
+                        # O usar transpose(Image.ROTATE_270)
+                        rotated = img.transpose(Image.ROTATE_270)
+                        
+                        # Convertir a RGB para asegurar compatibilidad PDF
+                        if rotated.mode != "RGB":
+                            rotated = rotated.convert("RGB")
+                        
+                        rotated.save(final_pdf_path, "PDF", resolution=100.0)
+                    
+                    self.log(f"  [INFO F2] GIF convertido a PDF y guardado en: {final_pdf_path}")
+                    
+                    # Borrar el GIF original
+                    try:
+                        os.remove(new_file)
+                    except Exception as e:
+                        self.log(f"  [WARN F2] No se pudo borrar el GIF original: {e}")
 
-        # Reintentos por si el archivo está en uso (WinError 32)
-        for attempt in range(5):
-            try:
-                shutil.move(str(latest_pdf), str(target))
-                self.log(f"  [OK F2] Etiqueta descargada y movida a: {target}")
-                break
-            except PermissionError as e:
-                self.log(
-                    f"  [WARN F2] Intento {attempt + 1}: PDF en uso al mover "
-                    f"{latest_pdf.name} → {target.name}: {e}. Reintentando..."
-                )
-                time.sleep(1.0)
-        else:
-            self.log(
-                f"  [WARN F2] PDF descargado pero no se pudo mover a {target} "
-                f"después de varios reintentos."
-            )
+                except Exception as e:
+                    self.log(f"  [ERROR F2] Falló conversión de GIF a PDF: {e}")
+                    return
+
+            else:
+                # Es PDF normal, moverlo
+                shutil.move(str(new_file), str(final_pdf_path))
+                self.log(f"  [INFO F2] PDF movido a: {final_pdf_path}")
+
+        except Exception as e:
+            self.log(f"  [ERROR F2] Error al procesar/mover el archivo descargado: {e}")
+
 
 
     def _merge_guides_for_day(self, day_dir: Path):
