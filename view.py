@@ -105,6 +105,17 @@ class LiverpoolApp(ctk.CTk):
         )
         self.btn_accept.pack(fill="x", padx=20, pady=10)
 
+        # Combo 2+3
+        self.btn_auto_2_3 = ctk.CTkButton(
+            self.actions_frame,
+            text="2+3) Auto Procesar y Aceptar",
+            command=self.on_auto_process_accept_click,
+            fg_color="#D35400",  # Un color distinto, mezcla de azul y naranja
+            hover_color="#A04000",
+            **btn_params
+        )
+        self.btn_auto_2_3.pack(fill="x", padx=20, pady=10)
+
         self.btn_merge = ctk.CTkButton(
             self.actions_frame,
             text="4) Unir Guías PDF",
@@ -252,6 +263,46 @@ class LiverpoolApp(ctk.CTk):
             )
         except Exception as e:
             messagebox.showerror("Error", f"Error en Fase 2: {e}")
+
+    def on_auto_process_accept_click(self):
+        selected_dates = [
+            d for d, var in self.selected_dates_vars.items() if var.get()
+        ]
+        if not selected_dates:
+            messagebox.showwarning(
+                "Atención", "Selecciona al menos una fecha para el proceso automático (2+3)."
+            )
+            return
+
+        self.append_log(
+            f"=== Iniciando PROCESO AUTOMÁTICO (2 y then 3) para: {', '.join(selected_dates)} ==="
+        )
+
+        # Paso 1: Procesar Detalles
+        try:
+            self.append_log("--- [Auto] Paso 1: Procesar Detalles (Fase 1) ---")
+            self.vm.process_details_dry_run(selected_dates)
+        except Exception as e:
+            messagebox.showerror("Error Auto", f"Falló Fase 1 en automático: {e}")
+            self.append_log(f"!!! Error en Fase 1: {e}")
+            return
+
+        # Paso 2: Aceptar y Descargar
+        try:
+            self.append_log("--- [Auto] Paso 2: Aceptar y Descargar (Fase 2) ---")
+            self.vm.accept_and_download_labels(selected_dates)
+            
+            self.append_log("=== PROCESO AUTOMÁTICO COMPLETADO EXITOSAMENTE ===")
+            messagebox.showinfo(
+                "Listo",
+                "Proceso Automático (2+3) completado.\n\n"
+                "1) Se procesaron detalles.\n"
+                "2) Se aceptaron y descargaron guías.\n\n"
+                "Revisa las carpetas correspondientes."
+            )
+        except Exception as e:
+            messagebox.showerror("Error Auto", f"Falló Fase 2 en automático: {e}")
+            self.append_log(f"!!! Error en Fase 2: {e}")
 
     def on_merge_click(self):
         selected_dates = [
