@@ -24,6 +24,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 
 from models import AppConfig, DayBatch, Order, OrderItem
+import json
 from config import (
     LIVERPOOL_ORDERS_URL,
     PENDING_TEXT,
@@ -282,6 +283,87 @@ class LiverpoolService:
                 f"Escaneo completado. Fechas con pendientes: {len(days)}, "
                 f"total pedidos pendientes: {total_pend}"
             )
+            return days
+
+        finally:
+            driver.quit()
+
+    def scan_orders_in_range(self, start_date_str: str, end_date_str: str) -> Dict[str, DayBatch]:
+        """
+        Escanea /orders buscando pedidos dentro del RANGO [start_date_str, end_date_str] (inclusive).
+        Se detiene AL MOMENTO de encontrar una fecha MENOR a start_date_str (asumiendo orden descendente).
+        """
+        days: Dict[str, DayBatch] = {}
+        self.log(f"Iniciando escaneo de rango: {start_date_str} al {end_date_str}")
+
+        driver = self._init_driver()
+        wait = WebDriverWait(driver, TIMEOUT)
+
+        try:
+            driver.get(LIVERPOOL_ORDERS_URL)
+            wait.until(EC.presence_of_element_located((By.TAG_NAME, "table")))
+            self._set_page_size_250(driver)
+
+            page_index = 1
+            stop_scan = False
+
+            # Limite de seguridad alto por si acaso
+            MAX_PAGES = 50 
+
+            while page_index <= MAX_PAGES and not stop_scan:
+                self.log(f"Escaneando página {page_index} (Rango {start_date_str} - {end_date_str})...")
+                orders_page = self._collect_orders_from_table(driver)
+                
+                if not orders_page:
+                    self.log("Página vacía. Fin del escaneo.")
+                    break
+
+                for o in orders_page:
+                    if not o.fecha_clave:
+                        continue
+                    
+                    # 1. Si fecha < start_date -> Ya nos pasamos, son muy viejos viajos. FIN.
+                    if o.fecha_clave < start_date_str:
+                        self.log(f"Fecha encontrada {o.fecha_clave} es menor al inicio del rango {start_date_str}. Deteniendo escaneo.")
+                        stop_scan = True
+                        break
+
+                    # 2. Si fecha > end_date -> Es más nuevo de lo que queremos. Ignorar.
+                    if o.fecha_clave > end_date_str:
+                        continue
+
+                    # 3. Si está en rango -> Guardar
+                    if start_date_str <= o.fecha_clave <= end_date_str:
+                        if o.fecha_clave not in days:
+                            days[o.fecha_clave] = DayBatch(date=o.fecha_clave)
+                        days[o.fecha_clave].orders.append(o)
+                
+                if stop_scan:
+                    break
+
+                # Siguiente página
+                try:
+                    wait_page = WebDriverWait(driver, 5)
+                    next_btn = wait_page.until(
+                        EC.presence_of_element_located(
+                            (By.XPATH, '//button[@aria-label="next page"]')
+                        )
+                    )
+                    if not next_btn.is_enabled():
+                        self.log("Botón Siguiente deshabilitado.")
+                        break
+                    
+                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", next_btn)
+                    wait_page.until(EC.element_to_be_clickable((By.XPATH, '//button[@aria-label="next page"]')))
+                    driver.execute_script("arguments[0].click();", next_btn)
+                    time.sleep(2)
+                    page_index += 1
+                except Exception:
+                    self.log("Fin de paginación o error al avanzar página.")
+                    break
+
+            total_orders = sum(len(b.orders) for b in days.values())
+            self.log(f"Escaneo de rango completado. Encontrados {total_orders} pedidos en {len(days)} fechas dentro del rango.")
             return days
 
         finally:
@@ -568,7 +650,165 @@ class LiverpoolService:
                 self._merge_labels_for_day(batch, day_dir, phase_label="F2")
 
         finally:
+            self._cleanup_driver(driver)
+
+    def reprocess_orders_execution(self, days: Dict[str, DayBatch], selected_dates: List[str]):
+        """
+        Reproceso de lista guardada:
+        1. Recorre pedidos cargados.
+        2. NO valida 'Pendiente de aceptación'.
+        3. Toma screenshots de detalles.
+        4. Descarga guías (si las hay).
+        5. Genera Excel y PDF final.
+        """
+        if not selected_dates:
+            self.log("No hay fechas para reprocesar.")
+            return
+
+        download_dir: Path = getattr(self.config, "download_dir", Path.home() / "Downloads")
+        download_dir.mkdir(parents=True, exist_ok=True)
+
+        driver = self._init_driver()
+        wait = WebDriverWait(driver, TIMEOUT)
+
+        try:
+            for date in selected_dates:
+                batch = days.get(date)
+                if not batch:
+                    continue
+
+                self.log(f"\n=== Reprocesando lista cargada para: {date} ===")
+                day_dir = self.config.base_dir / date
+                day_dir.mkdir(parents=True, exist_ok=True)
+
+                total = len(batch.orders)
+                for idx, order in enumerate(batch.orders, start=1):
+                    self.log(f"[{date}] Reprocesando {order.order_id} ({idx}/{total})")
+
+                    try:
+                        # 1. Ir al detalle
+                        driver.get(order.url)
+                        wait.until(EC.presence_of_element_located((By.XPATH, "//h4[contains(normalize-space(.),'Pedido n.')]")))
+
+                        # 2. Tomar screenshots (sin validar status)
+                        try:
+                            # Esperar carga items
+                            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'div[class*="_OrderItem_item_name__"]')))
+                            order.items = self._get_items_from_detail(driver)
+                            self._take_item_screenshots(driver, order, day_dir)
+                            order.status = "ok"
+                        except Exception as e:
+                            self.log(f"  [WARN] Falló screenshot detalles: {e}")
+                            order.status = "error_details"
+
+                        # 3. Descargar guía (si existe)
+                        try:
+                            # Intentar bajar guía sin aceptar
+                            # (Reutilizamos lógica interna de _download_label_if_ready o similar si existiera,
+                            #  pero como accept_and_download es monolítico, copiamos la parte de descarga)
+                            
+                            # Clic en Documentos
+                            tabs = driver.find_elements(By.XPATH, "//button[@role='tab']")
+                            doc_tab = None
+                            for t in tabs:
+                                if "documentos" in t.text.lower():
+                                    doc_tab = t
+                                    break
+                            
+                            if doc_tab:
+                                doc_tab.click()
+                                time.sleep(2)
+                                # Buscar 'Etiqueta de Envío'
+                                # ... (Lógica simplificada de descarga)
+                                self._try_download_label_only(driver, wait, order, day_dir, download_dir)
+
+                        except Exception as e:
+                            self.log(f"  [WARN] No se pudo descargar guía: {e}")
+
+                    except Exception as e:
+                        self.log(f"  [ERROR] Falló reproceso pedido {order.order_id}: {e}")
+
+                # Generar reporte y unir PDFs
+                self._generate_outputs_for_day(batch, day_dir)
+                self._merge_labels_for_day(batch, day_dir, phase_label="REPROCESS")
+
+        finally:
+            self._cleanup_driver(driver)
+
+    def _try_download_label_only(self, driver, wait, order, day_dir, download_dir):
+        """
+        Intenta descargar la guía asumiendo que ya estamos en la pestaña Documentos o accesibles.
+        """
+        try:
+            # Buscar botón de descarga de etiqueta
+            # XPath aproximado basado en tu lógica anterior
+            xpath_download = "//h6[contains(.,'Etiqueta de Envío')]/ancestor::div[contains(@class,'MuiPaper-root')]//button"
+            
+            btns = driver.find_elements(By.XPATH, xpath_download)
+            if not btns:
+                return
+
+            # Limpiar descargas previas
+            for f in download_dir.glob("*.pdf"):
+                try:
+                    f.unlink()
+                except:
+                    pass
+            
+            btns[0].click()
+            time.sleep(5) # Esperar descarga
+
+            # Mover archivo
+            downloaded = list(download_dir.glob("*.pdf"))
+            if downloaded:
+                latest = max(downloaded, key=lambda p: p.stat().st_mtime)
+                target = day_dir / "guias"
+                target.mkdir(parents=True, exist_ok=True)
+                dest = target / f"{order.order_id}.pdf"
+                shutil.move(str(latest), str(dest))
+                self.log(f"    -> Guía descargada: {dest.name}")
+        except Exception as e:
+            raise e
+
+    def _cleanup_driver(self, driver):
+        try:
             driver.quit()
+        except Exception:
+            pass
+
+    def save_orders_to_json(self, days: Dict[str, DayBatch], filepath: str = "orders_latest.json"):
+        """
+        Guarda el diccionario de días en un archivo JSON.
+        """
+        try:
+            data = {date: batch.to_dict() for date, batch in days.items()}
+            with open(filepath, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=4, ensure_ascii=False)
+            self.log(f"Lista de pedidos guardada en: {filepath}")
+        except Exception as e:
+            self.log(f"[ERROR] No se pudo guardar JSON: {e}")
+
+    def load_orders_from_json(self, filepath: str) -> Dict[str, DayBatch]:
+        """
+        Carga el diccionario de días desde un archivo JSON.
+        """
+        try:
+            if not os.path.exists(filepath):
+                self.log(f"[WARN] Archivo no encontrado: {filepath}")
+                return {}
+
+            with open(filepath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            days = {}
+            for date, batch_data in data.items():
+                days[date] = DayBatch.from_dict(batch_data)
+            
+            self.log(f"Lista cargada desde {filepath}. {len(days)} fechas encontradas.")
+            return days
+        except Exception as e:
+            self.log(f"[ERROR] No se pudo cargar JSON: {e}")
+            return {}
 
     def merge_labels_for_dates(
         self,
@@ -664,6 +904,138 @@ class LiverpoolService:
             if local_driver:
                 driver.quit()
                 self.log("  [INFO] Navegador de reintentos cerrado.")
+
+    def process_old_orders_execution(self, days: Dict[str, DayBatch], selected_dates: List[str]):
+        """
+        Workflow de ejecución para 'Procesar Antiguos':
+        Recorre cada fecha seleccionada y procesa sus pedidos:
+           - Toma screenshots (detalle).
+           - NO acepta pedidos.
+           - Descarga guía (entra a documentos y baja).
+        3. Genera excels, pdfs y merge de guías.
+        """
+        if not selected_dates:
+            self.log("No hay fechas seleccionadas para procesar antiguos.")
+            return
+
+        download_dir: Path = getattr(self.config, "download_dir", Path.home() / "Downloads")
+        download_dir.mkdir(parents=True, exist_ok=True)
+
+        driver = self._init_driver()
+        wait = WebDriverWait(driver, TIMEOUT)
+
+        try:
+            for date in selected_dates:
+                batch = days.get(date)
+                if not batch or not batch.orders:
+                    self.log(f"No hay pedidos en memoria para la fecha {date}. Primero escanea.")
+                    continue
+
+                self.log(f"\n=== Procesando pedidos antiguos para {date} ===")
+                day_dir = self.config.base_dir / date
+                day_dir.mkdir(parents=True, exist_ok=True)
+
+                total = len(batch.orders)
+                for idx, order in enumerate(batch.orders, start=1):
+                    self.log(f"[{date}] Procesando antiguo {order.order_id} ({idx}/{total})")
+                    
+                    try:
+                        # A) Ir al detalle
+                        driver.get(order.url)
+                        wait.until(EC.presence_of_element_located(
+                            (By.XPATH, "//h4[contains(normalize-space(.),'Pedido n.')]")
+                        ))
+
+                        # B) Tomar screenshots (lógica reutilizada de Dry-Run)
+                        try:
+                            # Esperar items
+                            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'div[class*="_OrderItem_item_name__"]')))
+                            items_list = self._get_items_from_detail(driver)
+                            order.items = items_list
+                            # Screenshots
+                            self._take_item_screenshots(driver, order, day_dir)
+                            order.status = "ok" 
+                        except Exception as e:
+                            self.log(f"  [WARN] No se pudieron tomar screenshots: {e}")
+                            order.status = "error_screenshots"
+
+                        # C) Descargar guía (SIN aceptar)
+                        self._download_guide_only(
+                            driver=driver,
+                            wait=wait,
+                            order=order,
+                            day_dir=day_dir,
+                            download_dir=download_dir
+                        )
+
+                    except Exception as e:
+                        self.log(f"  [ERROR] Falló proceso antiguo para {order.order_id}: {e}")
+
+                # 3. Generar Outputs
+                # Reintentar guías faltantes
+                self._retry_missing_guides(batch, day_dir, driver)
+
+                # Generar Excel y PDF visual
+                self._generate_outputs_for_day(batch, day_dir)
+                
+                # Unir guías
+                self._merge_labels_for_day(batch, day_dir, phase_label="OldOrders")
+
+                self.log(f"=== Fin proceso antiguos para {date} ===")
+
+        finally:
+            driver.quit()
+
+    def _download_guide_only(
+        self,
+        driver: webdriver.Edge,
+        wait: WebDriverWait,
+        order: Order,
+        day_dir: Path,
+        download_dir: Path
+    ):
+        """
+        Entra a la pestaña documentos y descarga la guía.
+        NO busca botones de aceptar.
+        """
+        # Abrir pestaña 'Documentos'
+        try:
+            documentos_tab = wait.until(
+                EC.element_to_be_clickable(
+                    (
+                        By.XPATH,
+                        "//button[contains(@class,'MuiTab-root') "
+                        "and contains(normalize-space(.),'Documentos')]",
+                    )
+                )
+            )
+            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", documentos_tab)
+            time.sleep(0.3)
+            driver.execute_script("arguments[0].click();", documentos_tab)
+            self.log("  [INFO Old] Pestaña 'Documentos' abierta.")
+        except Exception as e:
+            self.log(f"  [WARN Old] No se pudo abrir pestaña 'Documentos': {e}")
+            return
+
+        # Esperar tabla
+        try:
+            wait.until(
+                EC.presence_of_element_located(
+                    (By.XPATH, "//table//tr[contains(@class,'MuiTableRow-root')]")
+                )
+            )
+        except TimeoutException:
+            self.log("  [WARN Old] No se encontraron filas en Documentos.")
+            return
+
+        # Descargar
+        self._download_label_pdf(
+            driver=driver,
+            wait=wait,
+            order=order,
+            day_dir=day_dir,
+            download_dir=download_dir,
+        )
 
     def _merge_labels_for_day(self, batch: DayBatch, day_dir: Path, phase_label: str = "F3"):
         guides_dir = day_dir / "guias"
@@ -1233,10 +1605,22 @@ class LiverpoolService:
                     c.setFont("Helvetica", 10)
                     label = item.title
                     if len(units) > 1:
-                        label += f" [SIN IMAGEN] (unidad {unit_index})"
+                        # Si son muchas unidades, mostramos que es la N de M
+                        label_part = f" [SIN IMAGEN] (unidad {unit_index})"
+                        c.drawString(margin_left, y, label + label_part)
+                        
+                        # --- MODIFICACION: Añadir leyenda roja ---
+                        c.saveState()
+                        c.setFillColorRGB(1, 0, 0) # Rojo
+                        # La ponemos un poco a la derecha o debajo. 
+                        # Para no romper layout, la ponemos a la derecha alineada (ej. x=350)
+                        c.drawString(350, y, "SE REQUIERE TOMAR FOTO")
+                        c.restoreState()
+                        # -----------------------------------------
                     else:
                         label += " [SIN IMAGEN]"
-                    c.drawString(margin_left, y, label)
+                        c.drawString(margin_left, y, label)
+
                     y -= title_h + 10
                     continue
 
@@ -1275,6 +1659,15 @@ class LiverpoolService:
                 label = item.title
                 if len(units) > 1:
                     label += f" (unidad {unit_index})"
+                    
+                    # --- MODIFICACION: Añadir leyenda roja ---
+                    c.saveState()
+                    c.setFillColorRGB(1, 0, 0) # Rojo
+                    # La ponemos a la derecha alineada (ej. x=350)
+                    c.drawString(350, y, "SE REQUIERE TOMAR FOTO")
+                    c.restoreState()
+                    # -----------------------------------------
+
                 c.drawString(margin_left, y, label)
                 y -= title_h
 

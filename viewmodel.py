@@ -27,6 +27,11 @@ class LiverpoolViewModel:
 
     def scan_orders(self):
         self.days = self.service.scan_orders()
+        # Auto-guardar tras escaneo
+        try:
+            self.service.save_orders_to_json(self.days, "orders_auto_save.json")
+        except:
+            pass
 
     def get_dates_summary(self):
         return sorted(
@@ -47,3 +52,37 @@ class LiverpoolViewModel:
         Fase 3 (botón 4): unir guías de las fechas seleccionadas.
         """
         self.service.merge_labels_for_dates(self.days, selected_dates)
+
+    def scan_old_orders_5_days_ago(self):
+        """
+        Calcula el rango de 'hace 5 días' hasta 'ayer' (inclusive) y escanea.
+        Ej: Si hoy es 4, busca del 30 (hace 5 días) al 3 (ayer).
+        """
+        from datetime import datetime, timedelta
+        
+        today = datetime.now()
+        start_date = today - timedelta(days=5)
+        end_date = today - timedelta(days=1) # Hasta ayer
+        
+        start_str = start_date.strftime("%Y-%m-%d")
+        end_str = end_date.strftime("%Y-%m-%d")
+        
+        # Escaneo de rango
+        self.days = self.service.scan_orders_in_range(start_str, end_str)
+        return f"{start_str} al {end_str}"
+
+    def process_old_orders_execution(self, selected_dates: List[str]):
+        """
+        Ejecuta el proceso (screenshots + guías) para las fechas seleccionadas
+        (se asume que son de la sección de antiguos).
+        """
+        self.service.process_old_orders_execution(self.days, selected_dates)
+
+    def save_orders_json(self, filepath: str):
+        self.service.save_orders_to_json(self.days, filepath)
+
+    def load_orders_json(self, filepath: str):
+        self.days = self.service.load_orders_from_json(filepath)
+
+    def reprocess_orders_json(self, selected_dates: List[str]):
+        self.service.reprocess_orders_execution(self.days, selected_dates)
