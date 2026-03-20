@@ -25,6 +25,7 @@ from reportlab.pdfgen import canvas
 
 from models import AppConfig, DayBatch, Order, OrderItem
 import json
+import logging
 from config import (
     LIVERPOOL_ORDERS_URL,
     PENDING_TEXT,
@@ -52,16 +53,34 @@ class LiverpoolService:
     - Acepta pedidos y descarga etiquetas (Fase 2)
     """
 
-    def __init__(self, config: AppConfig, log_callback: Optional[Callable[[str], None]] = None):
+    def __init__(
+        self,
+        config: AppConfig,
+        log_callback: Optional[Callable[[str], None]] = None,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        cancel_event=None,
+    ):
         self.config = config
         self.log_callback = log_callback
+        self.progress_callback = progress_callback
+        self.cancel_event = cancel_event
 
-    # ---------- logging ----------
+    # ---------- logging / progreso / cancelación ----------
 
     def log(self, msg: str):
         print(msg)
+        logging.getLogger("liverpool").info(msg)
         if self.log_callback:
             self.log_callback(msg)
+
+    def _notify_progress(self, current: int, total: int, label: str = ""):
+        """Notifica el progreso al View si hay callback registrado."""
+        if self.progress_callback:
+            self.progress_callback(current, total, label)
+
+    def _is_cancelled(self) -> bool:
+        """Devuelve True si el usuario solicitó cancelar la operación."""
+        return self.cancel_event is not None and self.cancel_event.is_set()
 
     # ---------- Selenium driver ----------
 
@@ -224,6 +243,7 @@ class LiverpoolService:
             self._set_page_size_250(driver)
 
             page_index = 1
+            seen_ids: set = set()  # Evita duplicados entre páginas
             while True:
                 self.log(f"Escaneando página {page_index}...")
 
@@ -235,6 +255,9 @@ class LiverpoolService:
                         page_has_pending = True
                         if not o.fecha_clave:
                             continue
+                        if o.order_id in seen_ids:
+                            continue
+                        seen_ids.add(o.order_id)
                         if o.fecha_clave not in days:
                             days[o.fecha_clave] = DayBatch(date=o.fecha_clave)
                         days[o.fecha_clave].orders.append(o)
@@ -314,6 +337,7 @@ class LiverpoolService:
 
             page_index = 1
             stop_scan = False
+            seen_ids: set = set()  # Evita duplicados entre páginas
 
             # Limite de seguridad alto por si acaso
             MAX_PAGES = 50 
@@ -342,6 +366,9 @@ class LiverpoolService:
 
                     # 3. Si está en rango -> Guardar
                     if start_date_str <= o.fecha_clave <= end_date_str:
+                        if o.order_id in seen_ids:
+                            continue
+                        seen_ids.add(o.order_id)
                         if o.fecha_clave not in days:
                             days[o.fecha_clave] = DayBatch(date=o.fecha_clave)
                         days[o.fecha_clave].orders.append(o)
@@ -496,6 +523,10 @@ class LiverpoolService:
                 total_orders = len(batch.orders)
 
                 for idx, order in enumerate(batch.orders, start=1):
+                    if self._is_cancelled():
+                        self.log("  [INFO] Operación cancelada por el usuario.")
+                        return
+                    self._notify_progress(idx, total_orders, f"Pedido {order.order_id}")
                     self.log(f"[{date}] Pedido {order.order_id} ({idx}/{total_orders})")
                     try:
                         # Ir al detalle del pedido
@@ -639,6 +670,10 @@ class LiverpoolService:
                 total_orders = len(batch.orders)
 
                 for idx, order in enumerate(batch.orders, start=1):
+                    if self._is_cancelled():
+                        self.log("  [INFO] Operación cancelada por el usuario.")
+                        return
+                    self._notify_progress(idx, total_orders, f"Aceptando {order.order_id}")
                     self.log(f"[{date}] (F2) Pedido {order.order_id} ({idx}/{total_orders})")
                     try:
                         self._accept_and_download_for_order(
@@ -691,6 +726,10 @@ class LiverpoolService:
 
                 total = len(batch.orders)
                 for idx, order in enumerate(batch.orders, start=1):
+                    if self._is_cancelled():
+                        self.log("  [INFO] Operación cancelada por el usuario.")
+                        return
+                    self._notify_progress(idx, total, f"Reprocesando {order.order_id}")
                     self.log(f"[{date}] Reprocesando {order.order_id} ({idx}/{total})")
 
                     try:
@@ -895,8 +934,12 @@ class LiverpoolService:
 
                 total = len(batch.orders)
                 for idx, order in enumerate(batch.orders, start=1):
+                    if self._is_cancelled():
+                        self.log("  [INFO] Operación cancelada por el usuario.")
+                        return
+                    self._notify_progress(idx, total, f"Antiguo {order.order_id}")
                     self.log(f"[{date}] Procesando antiguo {order.order_id} ({idx}/{total})")
-                    
+
                     try:
                         # A) Ir al detalle
                         driver.get(order.url)
