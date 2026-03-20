@@ -78,8 +78,16 @@ class LiverpoolService:
         # options.add_argument("--profile-directory=Default")
         options.add_argument("--start-maximized")
 
-        service = EdgeService(executable_path=r"C:\WebDrivers\msedgedriver.exe")
-        driver = webdriver.Edge(service=service, options=options)
+        # Intentar auto-detectar el driver con Selenium Manager (Selenium ≥ 4.6).
+        # Si no funciona, caer al path fijo como fallback.
+        FALLBACK_DRIVER = r"C:\WebDrivers\msedgedriver.exe"
+        try:
+            driver = webdriver.Edge(options=options)
+            self.log("  [INFO] Edge driver detectado automáticamente por Selenium Manager.")
+        except Exception:
+            self.log(f"  [INFO] Usando driver fijo: {FALLBACK_DRIVER}")
+            service = EdgeService(executable_path=FALLBACK_DRIVER)
+            driver = webdriver.Edge(service=service, options=options)
         return driver
 
     def _set_page_size_250(self, driver: webdriver.Edge):
@@ -703,30 +711,15 @@ class LiverpoolService:
 
                         # 3. Descargar guía (si existe)
                         try:
-                            # Intentar bajar guía sin aceptar
-                            # (Reutilizamos lógica interna de _download_label_if_ready o similar si existiera,
-                            #  pero como accept_and_download es monolítico, copiamos la parte de descarga)
-                            
-                            # Clic en Documentos
-                            tabs = driver.find_elements(By.XPATH, "//button[@role='tab']")
-                            doc_tab = None
-                            for t in tabs:
-                                if "documentos" in t.text.lower():
-                                    doc_tab = t
-                                    break
-                            
-                            if doc_tab:
-                                doc_tab.click()
-                                time.sleep(2)
-                                # Buscar 'Etiqueta de Envío'
-                                # ... (Lógica simplificada de descarga)
-                                self._try_download_label_only(driver, wait, order, day_dir, download_dir)
-
+                            self._download_guide_only(driver, wait, order, day_dir, download_dir)
                         except Exception as e:
                             self.log(f"  [WARN] No se pudo descargar guía: {e}")
 
                     except Exception as e:
                         self.log(f"  [ERROR] Falló reproceso pedido {order.order_id}: {e}")
+
+                # Reintentar guías faltantes
+                self._retry_missing_guides(batch, day_dir, driver)
 
                 # Generar reporte y unir PDFs
                 self._generate_outputs_for_day(batch, day_dir)
@@ -734,41 +727,6 @@ class LiverpoolService:
 
         finally:
             self._cleanup_driver(driver)
-
-    def _try_download_label_only(self, driver, wait, order, day_dir, download_dir):
-        """
-        Intenta descargar la guía asumiendo que ya estamos en la pestaña Documentos o accesibles.
-        """
-        try:
-            # Buscar botón de descarga de etiqueta
-            # XPath aproximado basado en tu lógica anterior
-            xpath_download = "//h6[contains(.,'Etiqueta de Envío')]/ancestor::div[contains(@class,'MuiPaper-root')]//button"
-            
-            btns = driver.find_elements(By.XPATH, xpath_download)
-            if not btns:
-                return
-
-            # Limpiar descargas previas
-            for f in download_dir.glob("*.pdf"):
-                try:
-                    f.unlink()
-                except:
-                    pass
-            
-            btns[0].click()
-            time.sleep(5) # Esperar descarga
-
-            # Mover archivo
-            downloaded = list(download_dir.glob("*.pdf"))
-            if downloaded:
-                latest = max(downloaded, key=lambda p: p.stat().st_mtime)
-                target = day_dir / "guias"
-                target.mkdir(parents=True, exist_ok=True)
-                dest = target / f"{order.order_id}.pdf"
-                shutil.move(str(latest), str(dest))
-                self.log(f"    -> Guía descargada: {dest.name}")
-        except Exception as e:
-            raise e
 
     def _cleanup_driver(self, driver):
         try:
@@ -1460,42 +1418,9 @@ class LiverpoolService:
 
 
 
-    def _merge_guides_for_day(self, day_dir: Path):
-        """
-        Une todas las guías de <day_dir>/guias/*.pdf en un solo
-        GUIAS_<fecha>.pdf dentro de <day_dir>.
-        """
-        if PdfMerger is None:
-            self.log(
-                "  [WARN F2] PyPDF2 no está instalado. No se puede generar PDF unificado de guías."
-            )
-            return
-
-        guides_dir = day_dir / "guias"
-        if not guides_dir.exists():
-            self.log("  [INFO F2] No hay carpeta 'guias' para este día, nada que unir.")
-            return
-
-        pdfs = sorted(guides_dir.glob("*.pdf"))
-        if not pdfs:
-            self.log("  [INFO F2] No hay PDFs de guía para este día, nada que unir.")
-            return
-
-        merged_path = day_dir / f"GUIAS_{day_dir.name}.pdf"
-        self.log(f"  [INFO F2] Uniendo {len(pdfs)} guías en: {merged_path}")
-
-        try:
-            merger = PdfMerger()
-            for pdf in pdfs:
-                merger.append(str(pdf))
-            with open(merged_path, "wb") as f_out:
-                merger.write(f_out)
-            merger.close()
-            self.log(f"  [OK F2] PDF unificado de guías creado: {merged_path}")
-        except Exception as e:
-            self.log(f"  [ERROR F2] Al unir guías del día {day_dir.name}: {e}")
 
     # ---------- Generación de Excel / PDF ----------
+
 
     def _generate_outputs_for_day(self, batch: DayBatch, day_dir: Path):
         self.log(f"Generando archivos para el día {batch.date}...")

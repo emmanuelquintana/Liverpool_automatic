@@ -30,8 +30,8 @@ class LiverpoolViewModel:
         # Auto-guardar tras escaneo
         try:
             self.service.save_orders_to_json(self.days, "orders_auto_save.json")
-        except:
-            pass
+        except Exception as e:
+            self._log_proxy(f"[WARN] Auto-guardado falló: {e}")
 
     def get_dates_summary(self):
         return sorted(
