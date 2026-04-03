@@ -82,6 +82,11 @@ class LiverpoolService:
         """Devuelve True si el usuario solicitó cancelar la operación."""
         return self.cancel_event is not None and self.cancel_event.is_set()
 
+    @property
+    def _timeout(self) -> int:
+        """Timeout dinámico: se actualiza en vivo cuando el usuario cambia la config."""
+        return self.config.timeout
+
     # ---------- Selenium driver ----------
 
     def _init_driver(self) -> webdriver.Edge:
@@ -233,7 +238,7 @@ class LiverpoolService:
         self.log("Iniciando escaneo de órdenes (Fase 1, sin aceptar)...")
 
         driver = self._init_driver()
-        wait = WebDriverWait(driver, TIMEOUT)
+        wait = WebDriverWait(driver, self._timeout)
 
         try:
             driver.get(LIVERPOOL_ORDERS_URL)
@@ -328,7 +333,7 @@ class LiverpoolService:
         self.log(f"Iniciando escaneo de rango: {start_date_str} al {end_date_str}")
 
         driver = self._init_driver()
-        wait = WebDriverWait(driver, TIMEOUT)
+        wait = WebDriverWait(driver, self._timeout)
 
         try:
             driver.get(LIVERPOOL_ORDERS_URL)
@@ -507,7 +512,7 @@ class LiverpoolService:
             return
 
         driver = self._init_driver()
-        wait = WebDriverWait(driver, TIMEOUT)
+        wait = WebDriverWait(driver, self._timeout)
 
         try:
             for date in selected_dates:
@@ -553,7 +558,7 @@ class LiverpoolService:
 
                         # --- Verificación robusta de 'Pendiente de aceptación' ---
                         try:
-                            WebDriverWait(driver, TIMEOUT).until(
+                            WebDriverWait(driver, self._timeout).until(
                                 EC.presence_of_element_located(
                                     (
                                         By.XPATH,
@@ -646,7 +651,7 @@ class LiverpoolService:
             return
 
         driver = self._init_driver()
-        wait = WebDriverWait(driver, TIMEOUT)
+        wait = WebDriverWait(driver, self._timeout)
 
         # Carpeta donde Edge deja las descargas
         download_dir: Path = getattr(
@@ -712,7 +717,7 @@ class LiverpoolService:
         download_dir.mkdir(parents=True, exist_ok=True)
 
         driver = self._init_driver()
-        wait = WebDriverWait(driver, TIMEOUT)
+        wait = WebDriverWait(driver, self._timeout)
 
         try:
             for date in selected_dates:
@@ -875,7 +880,7 @@ class LiverpoolService:
             driver = self._init_driver()
             local_driver = True
         
-        wait = WebDriverWait(driver, TIMEOUT)
+        wait = WebDriverWait(driver, self._timeout)
         download_dir: Path = getattr(
             self.config,
             "download_dir",
@@ -919,7 +924,7 @@ class LiverpoolService:
         download_dir.mkdir(parents=True, exist_ok=True)
 
         driver = self._init_driver()
-        wait = WebDriverWait(driver, TIMEOUT)
+        wait = WebDriverWait(driver, self._timeout)
 
         try:
             for date in selected_dates:
@@ -1471,6 +1476,14 @@ class LiverpoolService:
         ok_orders = [o for o in batch.orders if o.status == "ok"]
         if not ok_orders:
             self.log(f"  No hay pedidos 'ok' para {batch.date}. Se omiten archivos.")
+            return
+
+        excel_path = day_dir / f"PEDIDOS_{batch.date}.xlsx"
+        if not self.config.overwrite_outputs and excel_path.exists():
+            self.log(
+                f"  [SKIP] Archivos del {batch.date} ya existen. "
+                "Activa 'Sobreescribir archivos' en ⚙ Configuración para regenerarlos."
+            )
             return
 
         # Excel principal

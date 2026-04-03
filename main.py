@@ -10,6 +10,8 @@ from config import (
     DEFAULT_BASE_DIR,
     DEFAULT_EDGE_USER_DATA_DIR,
     DEFAULT_EDGE_PROFILE_NAME,
+    DEFAULT_TIMEOUT,
+    DEFAULT_FALLBACK_DRIVER,
 )
 from settings import load_settings
 
@@ -36,17 +38,18 @@ def main():
     ctk.set_appearance_mode(appearance)
     ctk.set_default_color_theme("dark-blue")
 
-    # Log a archivo
+    # Logging a archivo
     _setup_file_logging()
 
-    base_dir = Path(saved.get("base_dir", str(DEFAULT_BASE_DIR)))
     config = AppConfig(
-        base_dir=base_dir,
+        base_dir=Path(saved.get("base_dir", str(DEFAULT_BASE_DIR))),
         edge_user_data_dir=DEFAULT_EDGE_USER_DATA_DIR,
         edge_profile_name=DEFAULT_EDGE_PROFILE_NAME,
+        timeout=int(saved.get("timeout", DEFAULT_TIMEOUT)),
+        fallback_driver=saved.get("fallback_driver", DEFAULT_FALLBACK_DRIVER),
+        overwrite_outputs=bool(saved.get("overwrite_outputs", True)),
     )
 
-    # Importar aquí para que ctk ya esté configurado
     from view import LiverpoolApp
     app = LiverpoolApp(config)
     app.mainloop()

@@ -1,4 +1,5 @@
 # view.py
+import os
 import tkinter as tk
 from tkinter import filedialog
 import threading
@@ -8,7 +9,10 @@ from pathlib import Path
 
 from models import AppConfig
 from viewmodel import LiverpoolViewModel, AUTO_SAVE_PATH
-from dialogs import show_info, show_success, show_warning, show_error, show_confirm
+from dialogs import (
+    show_info, show_success, show_warning, show_error, show_confirm,
+    show_settings, show_history,
+)
 from settings import save_settings
 
 # NO llamar ctk.set_appearance_mode aquí — lo hace main.py con el valor guardado
@@ -19,7 +23,6 @@ def _timestamp() -> str:
 
 
 def _play_done_sound():
-    """Beep de notificación del sistema (Windows). Silencia si no está disponible."""
     try:
         import winsound
         winsound.MessageBeep(winsound.MB_ICONASTERISK)
@@ -28,12 +31,11 @@ def _play_done_sound():
 
 
 def _stats_msg(stats: dict) -> str:
-    """Formatea las estadísticas de pedidos para mostrar en el modal."""
     lines = [
         f"✔  OK:        {stats['ok']}",
         f"✗  Errores:   {stats['error']}",
         f"⏭  Saltados:  {stats['skipped']}",
-        f"─────────────────",
+        "─────────────────",
         f"Total: {stats['total']}",
     ]
     return "\n".join(lines)
@@ -118,8 +120,7 @@ class LiverpoolApp(ctk.CTk):
     def _on_close(self):
         if self._operation_running:
             if show_confirm(
-                self,
-                "Cerrar aplicación",
+                self, "Cerrar aplicación",
                 "Hay una operación en curso.\n¿Deseas cerrar de todas formas?\n(El navegador puede quedar abierto)",
             ):
                 self.destroy()
@@ -144,40 +145,63 @@ class MainScreen(ctk.CTkFrame):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
 
-        # ── Header ──────────────────────────────────────────────────────
+        # ── Header fila 0: Carpeta Base ──────────────────────────────────
         self.header_frame = ctk.CTkFrame(self, corner_radius=10)
-        self.header_frame.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 10))
+        self.header_frame.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 5))
         self.header_frame.grid_columnconfigure(1, weight=1)
 
         ctk.CTkLabel(
             self.header_frame, text="Carpeta Base:", font=("Roboto Medium", 14)
-        ).grid(row=0, column=0, padx=15, pady=15)
+        ).grid(row=0, column=0, padx=15, pady=12)
 
         self.base_dir_var = tk.StringVar(value=str(self.controller.config_obj.base_dir))
         ctk.CTkEntry(
-            self.header_frame, textvariable=self.base_dir_var, height=35
-        ).grid(row=0, column=1, sticky="ew", padx=10)
+            self.header_frame, textvariable=self.base_dir_var, height=34
+        ).grid(row=0, column=1, sticky="ew", padx=8)
 
         ctk.CTkButton(
             self.header_frame, text="Elegir...", command=self.choose_base_dir,
-            width=100, height=35,
-        ).grid(row=0, column=2, padx=(0, 5))
+            width=85, height=34,
+        ).grid(row=0, column=2, padx=4)
 
         ctk.CTkButton(
-            self.header_frame, text="Ir a Reprocesar JSON",
-            command=lambda: self.controller.show_frame("ReprocessScreen"),
-            fg_color="#8e44ad", hover_color="#732d91", width=150, height=35
-        ).grid(row=0, column=3, padx=5)
+            self.header_frame, text="📁", command=self._open_in_explorer,
+            width=36, height=34, font=("Segoe UI", 15),
+            fg_color="transparent", hover_color="#2c2c2c",
+            border_width=1, border_color="#555",
+        ).grid(row=0, column=3, padx=4)
 
-        # Botón toggle tema 🌙 / ☀
+        # ── Header fila 1: acciones secundarias ──────────────────────────
+        toolbar = ctk.CTkFrame(self.header_frame, fg_color="transparent")
+        toolbar.grid(row=1, column=0, columnspan=5, sticky="ew", padx=15, pady=(0, 10))
+
+        ctk.CTkButton(
+            toolbar, text="Ir a Reprocesar JSON",
+            command=lambda: self.controller.show_frame("ReprocessScreen"),
+            fg_color="#8e44ad", hover_color="#732d91", height=30, width=150
+        ).pack(side="left", padx=(0, 8))
+
+        ctk.CTkButton(
+            toolbar, text="⚙ Config",
+            command=lambda: show_settings(self, self.controller.config_obj),
+            height=30, width=95, fg_color="#2c3e50", hover_color="#34495e",
+        ).pack(side="left", padx=(0, 6))
+
+        ctk.CTkButton(
+            toolbar, text="📋 Historial",
+            command=lambda: show_history(self),
+            height=30, width=105, fg_color="#1a5276", hover_color="#21618c",
+        ).pack(side="left", padx=(0, 6))
+
+        # Tema toggle
         initial_icon = "☀" if ctk.get_appearance_mode() == "Light" else "🌙"
         self.btn_theme = ctk.CTkButton(
-            self.header_frame, text=initial_icon, command=self._toggle_theme,
-            width=40, height=35, font=("Segoe UI", 16),
+            toolbar, text=initial_icon, command=self._toggle_theme,
+            width=36, height=30, font=("Segoe UI", 14),
             fg_color="transparent", hover_color="#333",
             border_width=1, border_color="#555",
         )
-        self.btn_theme.grid(row=0, column=4, padx=(5, 15))
+        self.btn_theme.pack(side="right")
 
         # ── Panel central ────────────────────────────────────────────────
         self.center_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -191,9 +215,7 @@ class MainScreen(ctk.CTkFrame):
         self.actions_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
         self.actions_frame.grid_columnconfigure(0, weight=1)
 
-        ctk.CTkLabel(
-            self.actions_frame, text="Acciones", font=("Roboto Medium", 16)
-        ).pack(pady=(15, 10))
+        ctk.CTkLabel(self.actions_frame, text="Acciones", font=("Roboto Medium", 16)).pack(pady=(15, 10))
 
         btn_params = {"height": 40, "font": ("Roboto", 13), "corner_radius": 8}
 
@@ -225,30 +247,25 @@ class MainScreen(ctk.CTkFrame):
         # ── Progreso + Cancelar ──────────────────────────────────────────
         prog_outer = ctk.CTkFrame(self.actions_frame, fg_color="transparent")
         prog_outer.pack(fill="x", padx=20, pady=(0, 10))
-
         self.progress_bar = ctk.CTkProgressBar(prog_outer, height=8, corner_radius=4)
         self.progress_bar.set(0)
         self.progress_bar.pack(fill="x", pady=(0, 5))
-
         prog_row = ctk.CTkFrame(prog_outer, fg_color="transparent")
         prog_row.pack(fill="x")
         prog_row.grid_columnconfigure(0, weight=1)
-
         self.progress_label = ctk.CTkLabel(
             prog_row, text="Listo", font=("Roboto", 11), text_color="gray", anchor="w")
         self.progress_label.grid(row=0, column=0, sticky="w")
-
         self.btn_cancel = ctk.CTkButton(
             prog_row, text="⏹ Detener", command=self._on_cancel_click,
             fg_color="#c0392b", hover_color="#96281b",
             width=100, height=28, font=("Roboto", 11), corner_radius=6, state="disabled")
         self.btn_cancel.grid(row=0, column=1, padx=(10, 0))
 
-        # ── Separador ────────────────────────────────────────────────────
+        # ── Separador + Antiguos ──────────────────────────────────────────
         ctk.CTkFrame(self.actions_frame, height=2, fg_color="gray").pack(fill="x", padx=10, pady=5)
-        ctk.CTkLabel(
-            self.actions_frame, text="Antiguos (hace 5 días)", font=("Roboto Medium", 14)
-        ).pack(pady=(0, 5))
+        ctk.CTkLabel(self.actions_frame, text="Antiguos (hace 5 días)",
+                     font=("Roboto Medium", 14)).pack(pady=(0, 5))
 
         self.btn_scan_old = ctk.CTkButton(
             self.actions_frame, text="5) Escanear Antiguos",
@@ -271,26 +288,25 @@ class MainScreen(ctk.CTkFrame):
         self.dates_container.grid_rowconfigure(2, weight=1)
         self.dates_container.grid_columnconfigure(0, weight=1)
 
-        ctk.CTkLabel(
-            self.dates_container, text="Fechas con Pendientes", font=("Roboto Medium", 16),
-        ).grid(row=0, column=0, pady=(15, 8))
+        # Badge con totales (se actualiza en refresh_dates_checkboxes)
+        self.lbl_dates_title = ctk.CTkLabel(
+            self.dates_container, text="Fechas con Pendientes",
+            font=("Roboto Medium", 14))
+        self.lbl_dates_title.grid(row=0, column=0, pady=(15, 8))
 
         sel_row = ctk.CTkFrame(self.dates_container, fg_color="transparent")
         sel_row.grid(row=1, column=0, sticky="ew", padx=15, pady=(0, 6))
-        ctk.CTkButton(
-            sel_row, text="✓ Todos", command=self._select_all_dates,
-            width=80, height=26, font=("Roboto", 11),
-            fg_color="#27ae60", hover_color="#1e8449", corner_radius=6
-        ).pack(side="left", padx=(0, 6))
-        ctk.CTkButton(
-            sel_row, text="✗ Ninguno", command=self._deselect_all_dates,
-            width=80, height=26, font=("Roboto", 11),
-            fg_color="#555", hover_color="#666", corner_radius=6
-        ).pack(side="left")
+        ctk.CTkButton(sel_row, text="✓ Todos", command=self._select_all_dates,
+                      width=80, height=26, font=("Roboto", 11),
+                      fg_color="#27ae60", hover_color="#1e8449", corner_radius=6
+                      ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(sel_row, text="✗ Ninguno", command=self._deselect_all_dates,
+                      width=80, height=26, font=("Roboto", 11),
+                      fg_color="#555", hover_color="#666", corner_radius=6
+                      ).pack(side="left")
 
         self.dates_scroll_frame = ctk.CTkScrollableFrame(
-            self.dates_container, label_text="Selecciona fechas"
-        )
+            self.dates_container, label_text="Selecciona fechas")
         self.dates_scroll_frame.grid(row=2, column=0, sticky="nsew", padx=15, pady=(0, 15))
 
         # ── Log ──────────────────────────────────────────────────────────
@@ -302,33 +318,26 @@ class MainScreen(ctk.CTkFrame):
         log_header = ctk.CTkFrame(self.log_frame, fg_color="transparent")
         log_header.grid(row=0, column=0, sticky="ew", padx=15, pady=(10, 5))
         log_header.grid_columnconfigure(0, weight=1)
-
-        ctk.CTkLabel(
-            log_header, text="Registro de Actividad", font=("Roboto Medium", 14)
-        ).grid(row=0, column=0, sticky="w")
-
-        ctk.CTkButton(
-            log_header, text="💾 Exportar", command=self._export_log,
-            width=85, height=26, font=("Roboto", 11),
-            fg_color="#2980b9", hover_color="#2471a3", corner_radius=6
-        ).grid(row=0, column=1, sticky="e", padx=(0, 6))
-
-        ctk.CTkButton(
-            log_header, text="🗑 Limpiar", command=self._clear_log,
-            width=80, height=26, font=("Roboto", 11),
-            fg_color="#555", hover_color="#666", corner_radius=6
-        ).grid(row=0, column=2, sticky="e")
+        ctk.CTkLabel(log_header, text="Registro de Actividad",
+                     font=("Roboto Medium", 14)).grid(row=0, column=0, sticky="w")
+        ctk.CTkButton(log_header, text="💾 Exportar", command=self._export_log,
+                      width=85, height=26, font=("Roboto", 11),
+                      fg_color="#2980b9", hover_color="#2471a3", corner_radius=6
+                      ).grid(row=0, column=1, sticky="e", padx=(0, 6))
+        ctk.CTkButton(log_header, text="🗑 Limpiar", command=self._clear_log,
+                      width=80, height=26, font=("Roboto", 11),
+                      fg_color="#555", hover_color="#666", corner_radius=6
+                      ).grid(row=0, column=2, sticky="e")
 
         self.log_text = ctk.CTkTextbox(self.log_frame, height=150, font=("Consolas", 12))
         self.log_text.grid(row=1, column=0, sticky="nsew", padx=15, pady=(0, 15))
 
-        ctk.CTkLabel(
-            self, text="Desarrollado por Jose Emmanuel Quintana Torres",
-            font=("Roboto", 10), text_color="gray",
-        ).grid(row=3, column=0, pady=(0, 10))
+        ctk.CTkLabel(self, text="Desarrollado por Jose Emmanuel Quintana Torres",
+                     font=("Roboto", 10), text_color="gray",
+                     ).grid(row=3, column=0, pady=(0, 10))
 
     # ------------------------------------------------------------------
-    # Helpers: estado, progreso, UI
+    # Helpers UI
     # ------------------------------------------------------------------
 
     def _set_buttons_enabled(self, enabled: bool):
@@ -370,6 +379,11 @@ class MainScreen(ctk.CTkFrame):
         ctk.set_appearance_mode(new_mode)
         save_settings({"appearance_mode": new_mode})
         self.btn_theme.configure(text="☀" if new_mode == "Light" else "🌙")
+
+    def _open_in_explorer(self):
+        base = str(self.controller.config_obj.base_dir)
+        os.makedirs(base, exist_ok=True)
+        os.startfile(base)
 
     def _select_all_dates(self):
         for var in self.selected_dates_vars.values():
@@ -424,11 +438,20 @@ class MainScreen(ctk.CTkFrame):
         self.selected_dates_vars.clear()
 
         dates_summary = self.vm.get_dates_summary()
+
+        # Actualizar badge
+        if dates_summary:
+            total_orders = sum(count for _, count in dates_summary)
+            self.lbl_dates_title.configure(
+                text=f"Fechas con Pendientes\n{total_orders} pedidos · {len(dates_summary)} fecha(s)"
+            )
+        else:
+            self.lbl_dates_title.configure(text="Fechas con Pendientes\n(Sin pendientes)")
+
         if not dates_summary:
-            ctk.CTkLabel(
-                self.dates_scroll_frame,
-                text="(No hay fechas con pendientes)", text_color="gray",
-            ).pack(anchor="w", pady=5)
+            ctk.CTkLabel(self.dates_scroll_frame,
+                         text="(No hay fechas con pendientes)", text_color="gray",
+                         ).pack(anchor="w", pady=5)
             return
 
         for fecha, count in dates_summary:
@@ -468,10 +491,8 @@ class MainScreen(ctk.CTkFrame):
         if not selected_dates:
             show_warning(self, "Sin fechas", "Selecciona al menos una fecha para procesar.")
             return
-
         self.controller.append_log(
-            f"=== Procesando detalles (dry-run) para fechas: {', '.join(selected_dates)} ==="
-        )
+            f"=== Procesando detalles para fechas: {', '.join(selected_dates)} ===")
 
         def _do():
             self.vm.process_details_dry_run(selected_dates)
@@ -480,21 +501,29 @@ class MainScreen(ctk.CTkFrame):
             self.controller.append_log("=== Proceso Fase 1 completado ===")
             stats = self.vm.get_batch_stats(selected_dates)
             msg = f"Detalles procesados.\n\n{_stats_msg(stats)}"
-            self.controller.after(
-                0, lambda: show_success(self, "Fase 1 completada", msg)
-            )
+            self.controller.after(0, lambda: show_success(self, "Fase 1 completada", msg))
 
         self._run_action(_do, post_ui=_after)
 
     def on_accept_click(self):
         selected_dates = self._get_selected_dates()
         if not selected_dates:
-            show_warning(self, "Sin fechas", "Selecciona al menos una fecha para aceptar/descargar guías.")
+            show_warning(self, "Sin fechas", "Selecciona al menos una fecha para aceptar guías.")
+            return
+
+        # ── Confirmación antes de aceptar pedidos reales ──
+        total = sum(
+            len(self.vm.days[d].orders) for d in selected_dates if d in self.vm.days
+        )
+        if not show_confirm(
+            self, "Confirmar Fase 2",
+            f"Se van a ACEPTAR {total} pedidos en Liverpool.\n"
+            f"Fechas: {', '.join(selected_dates)}\n\n¿Continuar?"
+        ):
             return
 
         self.controller.append_log(
-            f"=== Fase 2: Aceptar + descargar guías para: {', '.join(selected_dates)} ==="
-        )
+            f"=== Fase 2: Aceptar + descargar guías para: {', '.join(selected_dates)} ===")
 
         def _do():
             self.vm.accept_and_download_labels(selected_dates)
@@ -503,9 +532,7 @@ class MainScreen(ctk.CTkFrame):
             self.controller.append_log("=== Proceso Fase 2 completado ===")
             stats = self.vm.get_batch_stats(selected_dates)
             msg = f"Guías descargadas.\n\n{_stats_msg(stats)}"
-            self.controller.after(
-                0, lambda: show_success(self, "Fase 2 completada", msg)
-            )
+            self.controller.after(0, lambda: show_success(self, "Fase 2 completada", msg))
 
         self._run_action(_do, post_ui=_after)
 
@@ -515,9 +542,18 @@ class MainScreen(ctk.CTkFrame):
             show_warning(self, "Sin fechas", "Selecciona al menos una fecha para el proceso automático.")
             return
 
-        self.controller.append_log(
-            f"=== PROCESO AUTOMÁTICO (2+3) para: {', '.join(selected_dates)} ==="
+        # Confirmación para auto también (incluye aceptar pedidos reales)
+        total = sum(
+            len(self.vm.days[d].orders) for d in selected_dates if d in self.vm.days
         )
+        if total > 0 and not show_confirm(
+            self, "Confirmar proceso automático",
+            f"El proceso automático ACEPTARÁ {total} pedidos.\n¿Continuar?"
+        ):
+            return
+
+        self.controller.append_log(
+            f"=== PROCESO AUTOMÁTICO (2+3) para: {', '.join(selected_dates)} ===")
 
         def _do():
             self.controller.append_log("--- [Auto] Paso 1: Procesar Detalles ---")
@@ -529,9 +565,7 @@ class MainScreen(ctk.CTkFrame):
             self.controller.append_log("=== PROCESO AUTOMÁTICO COMPLETADO ===")
             stats = self.vm.get_batch_stats(selected_dates)
             msg = f"Fases 2 y 3 ejecutadas correctamente.\n\n{_stats_msg(stats)}"
-            self.controller.after(
-                0, lambda: show_success(self, "Proceso automático completado", msg)
-            )
+            self.controller.after(0, lambda: show_success(self, "Proceso automático completado", msg))
 
         self._run_action(_do, post_ui=_after)
 
@@ -540,10 +574,8 @@ class MainScreen(ctk.CTkFrame):
         if not selected_dates:
             show_warning(self, "Sin fechas", "Selecciona al menos una fecha para unir guías.")
             return
-
         self.controller.append_log(
-            f"=== Fase 3: Uniendo guías para: {', '.join(selected_dates)} ==="
-        )
+            f"=== Fase 3: Uniendo guías para: {', '.join(selected_dates)} ===")
 
         def _do():
             self.vm.merge_labels(selected_dates)
@@ -551,11 +583,8 @@ class MainScreen(ctk.CTkFrame):
         def _after():
             self.controller.append_log("=== Fase 3 completada ===")
             self.controller.after(
-                0, lambda: show_success(
-                    self, "Guías unidas",
-                    "PDF unificado generado.\nRevisa GUIAS_<fecha>.pdf en la carpeta del día.",
-                )
-            )
+                0, lambda: show_success(self, "Guías unidas",
+                                        "PDF unificado generado.\nRevisa GUIAS_<fecha>.pdf en la carpeta del día."))
 
         self._run_action(_do, post_ui=_after)
 
@@ -571,8 +600,7 @@ class MainScreen(ctk.CTkFrame):
             date_str = result_holder[0] or "?"
             self.controller.append_log(f"=== Escaneo de antiguos ({date_str}) finalizado ===")
             self.controller.after(
-                0, lambda: show_success(self, "Escaneo completado", f"Pedidos antiguos en:\n{date_str}")
-            )
+                0, lambda: show_success(self, "Escaneo completado", f"Pedidos antiguos en:\n{date_str}"))
 
         self._run_action(_do_wrapper, post_ui=_after)
 
@@ -581,7 +609,6 @@ class MainScreen(ctk.CTkFrame):
         if not selected_dates:
             show_warning(self, "Sin fechas", "Selecciona al menos una fecha para procesar antiguos.")
             return
-
         self.controller.append_log(f"=== Procesando Antiguos para: {', '.join(selected_dates)} ===")
 
         def _do():
@@ -592,8 +619,7 @@ class MainScreen(ctk.CTkFrame):
             stats = self.vm.get_batch_stats(selected_dates)
             msg = f"Screenshots y guías procesadas.\n\n{_stats_msg(stats)}"
             self.controller.after(
-                0, lambda: show_success(self, "Proceso de antiguos completado", msg)
-            )
+                0, lambda: show_success(self, "Proceso de antiguos completado", msg))
 
         self._run_action(_do, post_ui=_after)
 
@@ -702,22 +728,16 @@ class ReprocessScreen(ctk.CTkFrame):
         log_header = ctk.CTkFrame(self.log_frame, fg_color="transparent")
         log_header.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 5))
         log_header.grid_columnconfigure(0, weight=1)
-
-        ctk.CTkLabel(
-            log_header, text="Registro de Actividad", font=("Roboto Medium", 14)
-        ).grid(row=0, column=0, sticky="w")
-
-        ctk.CTkButton(
-            log_header, text="💾 Exportar", command=self._export_log,
-            width=85, height=26, font=("Roboto", 11),
-            fg_color="#2980b9", hover_color="#2471a3", corner_radius=6
-        ).grid(row=0, column=1, sticky="e", padx=(0, 6))
-
-        ctk.CTkButton(
-            log_header, text="🗑 Limpiar", command=self._clear_log,
-            width=80, height=26, font=("Roboto", 11),
-            fg_color="#555", hover_color="#666", corner_radius=6
-        ).grid(row=0, column=2, sticky="e")
+        ctk.CTkLabel(log_header, text="Registro de Actividad",
+                     font=("Roboto Medium", 14)).grid(row=0, column=0, sticky="w")
+        ctk.CTkButton(log_header, text="💾 Exportar", command=self._export_log,
+                      width=85, height=26, font=("Roboto", 11),
+                      fg_color="#2980b9", hover_color="#2471a3", corner_radius=6
+                      ).grid(row=0, column=1, sticky="e", padx=(0, 6))
+        ctk.CTkButton(log_header, text="🗑 Limpiar", command=self._clear_log,
+                      width=80, height=26, font=("Roboto", 11),
+                      fg_color="#555", hover_color="#666", corner_radius=6
+                      ).grid(row=0, column=2, sticky="e")
 
         self.log_text = ctk.CTkTextbox(self.log_frame, font=("Consolas", 12))
         self.log_text.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
@@ -748,8 +768,7 @@ class ReprocessScreen(ctk.CTkFrame):
     def _export_log(self):
         ts = datetime.now().strftime("%Y-%m-%d_%H-%M")
         filepath = filedialog.asksaveasfilename(
-            title="Guardar log como...",
-            defaultextension=".txt",
+            title="Guardar log como...", defaultextension=".txt",
             initialfile=f"LOG_{ts}.txt",
             filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
         )
@@ -771,8 +790,6 @@ class ReprocessScreen(ctk.CTkFrame):
     # ------------------------------------------------------------------
 
     def on_load_last_saved(self):
-        """Carga directamente el último orders_auto_save.json sin diálogo."""
-        import os
         if not os.path.exists(AUTO_SAVE_PATH):
             show_warning(self, "Archivo no encontrado",
                          f"No existe el archivo auto-guardado:\n{AUTO_SAVE_PATH}")
@@ -804,19 +821,14 @@ class ReprocessScreen(ctk.CTkFrame):
         for w in self.dates_scroll.winfo_children():
             w.destroy()
         self.selected_dates_vars.clear()
-
         summary = self.vm.get_dates_summary()
         if not summary:
             ctk.CTkLabel(self.dates_scroll, text="No hay pedidos cargados.").pack()
             return
-
         for fecha, count in summary:
             var = ctk.BooleanVar(value=True)
-            cb = ctk.CTkCheckBox(
-                self.dates_scroll,
-                text=f"{fecha} ({count} pedidos)",
-                variable=var
-            )
+            cb = ctk.CTkCheckBox(self.dates_scroll,
+                                 text=f"{fecha} ({count} pedidos)", variable=var)
             cb.pack(anchor="w", pady=2)
             self.selected_dates_vars[fecha] = var
 
@@ -845,7 +857,6 @@ class ReprocessScreen(ctk.CTkFrame):
             stats = self.vm.get_batch_stats(selected)
             msg = f"Pedidos reprocesados.\n\n{_stats_msg(stats)}"
             self.controller.after(
-                0, lambda: show_success(self, "Reproceso completado", msg)
-            )
+                0, lambda: show_success(self, "Reproceso completado", msg))
 
         self.controller.run_in_thread(_do, on_finish=_finish)
