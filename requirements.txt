@@ -4,3 +4,7 @@ openpyxl
 Pillow
 reportlab
 customtkinter
+fastapi
+uvicorn
+jinja2
+python-multipart

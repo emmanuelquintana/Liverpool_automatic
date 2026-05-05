@@ -23,6 +23,21 @@ function getRect(el) {
   };
 }
 
+function findProductImage(root) {
+  const oldMedia = root.querySelector(".MuiCardMedia-root");
+  if (oldMedia) return oldMedia;
+
+  const images = Array.from(root.querySelectorAll("img[src]"));
+  return (
+    images.find(img => {
+      const src = img.getAttribute("src") || "";
+      return /liverpool\.com\.mx|\/xl\//i.test(src);
+    }) ||
+    images.find(img => img.getBoundingClientRect().width > 0 && img.getBoundingClientRect().height > 0) ||
+    null
+  );
+}
+
 // index viene directamente de Selenium: driver.execute_script(..., item_index)
 const index = arguments[0];
 const itemRoots = getItemRoots();
@@ -53,7 +68,7 @@ if (typeof index !== "number" || index < 0 || index >= itemRoots.length) {
 const root = itemRoots[index];
 
 // Imagen y título del producto
-const imgEl = root.querySelector(".MuiCardMedia-root");
+const imgEl = findProductImage(root);
 const titleEl = root.querySelector('div[class*="_OrderItem_item_name__"]');
 
 // Todas las secciones tipo título dentro del ítem

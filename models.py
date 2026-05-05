@@ -91,3 +91,5 @@ class AppConfig:
     timeout: int = 120
     fallback_driver: str = r"C:\WebDrivers\msedgedriver.exe"
     overwrite_outputs: bool = True
+    headless: bool = False
+    download_dir: Path | None = None

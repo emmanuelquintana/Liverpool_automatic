@@ -58,11 +58,13 @@ class LiverpoolService:
         config: AppConfig,
         log_callback: Optional[Callable[[str], None]] = None,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        input_callback: Optional[Callable[[str, str, str], str]] = None,
         cancel_event=None,
     ):
         self.config = config
         self.log_callback = log_callback
         self.progress_callback = progress_callback
+        self.input_callback = input_callback
         self.cancel_event = cancel_event
 
     # ---------- logging / progreso / cancelación ----------
@@ -98,13 +100,19 @@ class LiverpoolService:
         options = webdriver.EdgeOptions()
 
         # carpeta exclusiva para este bot
-        options.add_argument(f"--user-data-dir={self.config.edge_user_data_dir}")
-        # options.add_argument("--profile-directory=Default")
+        if self.config.edge_user_data_dir:
+            options.add_argument(f"--user-data-dir={self.config.edge_user_data_dir}")
         options.add_argument("--start-maximized")
+
+        if self.config.headless:
+            options.add_argument("--headless=new")
+            options.add_argument("--disable-gpu")
+            options.add_argument("--no-sandbox")
+            options.add_argument("--disable-dev-shm-usage")
 
         # Intentar auto-detectar el driver con Selenium Manager (Selenium ≥ 4.6).
         # Si no funciona, caer al path fijo como fallback.
-        FALLBACK_DRIVER = r"C:\WebDrivers\msedgedriver.exe"
+        FALLBACK_DRIVER = self.config.fallback_driver
         try:
             driver = webdriver.Edge(options=options)
             self.log("  [INFO] Edge driver detectado automáticamente por Selenium Manager.")
@@ -161,6 +169,50 @@ class LiverpoolService:
             self.log("Se seleccionó '250' resultados por página.")
         except Exception as e:
             self.log(f"[WARN] No se pudo forzar 250 por página: {e}")
+
+    # ---------- utilidades de interacción ----------
+
+    def request_user_input(self, label: str, placeholder: str = "", input_type: str = "text") -> str:
+        """Pausa la ejecución y solicita una entrada al usuario vía callback (web/gui)."""
+        if self.input_callback:
+            return self.input_callback(label, placeholder, input_type)
+        return ""
+
+    def _check_and_handle_login(self, driver: webdriver.Edge):
+        """Detecta si estamos en la página de login y solicita credenciales si es necesario."""
+        try:
+            # Espera breve para ver si redirige
+            time.sleep(2)
+
+            # Selectores comunes de login en Liverpool Marketplace
+            email_fields = driver.find_elements(By.NAME, "email") or driver.find_elements(By.ID, "email")
+            if email_fields:
+                self.log("[INTERACTIVE] Se detectó página de inicio de sesión.")
+                email = self.request_user_input("Correo electrónico de Liverpool", "usuario@ejemplo.com")
+                password = self.request_user_input("Contraseña", "", "password")
+
+                # Ingresar datos
+                email_fields[0].send_keys(email)
+                pass_fields = driver.find_elements(By.NAME, "password") or driver.find_elements(By.ID, "password")
+                if pass_fields:
+                    pass_fields[0].send_keys(password)
+
+                submit_btns = driver.find_elements(By.XPATH, "//button[@type='submit']")
+                if submit_btns:
+                    submit_btns[0].click()
+
+                # Check for MFA (OTP)
+                time.sleep(5)
+                mfa_field = driver.find_elements(By.NAME, "otp") or driver.find_elements(By.ID, "otp") or driver.find_elements(By.XPATH, "//input[contains(@id,'verification')]")
+                if mfa_field:
+                    otp = self.request_user_input("Código de Verificación (MFA)", "123456")
+                    mfa_field[0].send_keys(otp)
+                    submit_btns = driver.find_elements(By.XPATH, "//button[@type='submit']")
+                    if submit_btns:
+                        submit_btns[0].click()
+                    time.sleep(5)
+        except Exception as e:
+            self.log(f"[WARN] Error en el flujo de login interactivo: {e}")
 
     # ---------- utilidades ----------
 
@@ -242,6 +294,7 @@ class LiverpoolService:
 
         try:
             driver.get(LIVERPOOL_ORDERS_URL)
+            self._check_and_handle_login(driver)
             wait.until(EC.presence_of_element_located((By.TAG_NAME, "table")))
 
             # Intentar fijar 250 por página
@@ -337,6 +390,7 @@ class LiverpoolService:
 
         try:
             driver.get(LIVERPOOL_ORDERS_URL)
+            self._check_and_handle_login(driver)
             wait.until(EC.presence_of_element_located((By.TAG_NAME, "table")))
             self._set_page_size_250(driver)
 
@@ -536,6 +590,7 @@ class LiverpoolService:
                     try:
                         # Ir al detalle del pedido
                         driver.get(order.url)
+                        self._check_and_handle_login(driver)
                         wait.until(
                             EC.presence_of_element_located(
                                 (
@@ -654,11 +709,7 @@ class LiverpoolService:
         wait = WebDriverWait(driver, self._timeout)
 
         # Carpeta donde Edge deja las descargas
-        download_dir: Path = getattr(
-            self.config,
-            "download_dir",
-            Path.home() / "Downloads",
-        )
+        download_dir = self.config.download_dir or (Path.home() / "Downloads")
         download_dir.mkdir(parents=True, exist_ok=True)
 
         try:
@@ -712,8 +763,7 @@ class LiverpoolService:
         if not selected_dates:
             self.log("No hay fechas para reprocesar.")
             return
-
-        download_dir: Path = getattr(self.config, "download_dir", Path.home() / "Downloads")
+        download_dir = self.config.download_dir or (Path.home() / "Downloads")
         download_dir.mkdir(parents=True, exist_ok=True)
 
         driver = self._init_driver()
@@ -1707,9 +1757,34 @@ def take_item_screenshot(driver, item_index: int, out_path: str, logger=print) -
 
             # 1. Intentar buscar la imagen y scrollear a ella para activar lazy loading
             try:
-                img_el = root_el.find_element(By.CSS_SELECTOR, ".MuiCardMedia-root")
-                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", img_el)
-                time.sleep(0.5)  # Esperar carga de imagen
+                img_el = root_el.find_element(By.CSS_SELECTOR, ".MuiCardMedia-root, img[src]")
+                driver.execute_script(
+                    """
+                    const img = arguments[0];
+                    if (img.tagName && img.tagName.toLowerCase() === 'img') {
+                        img.loading = 'eager';
+                    }
+                    img.scrollIntoView({block: 'center', inline: 'nearest'});
+                    """,
+                    img_el,
+                )
+
+                for _ in range(10):
+                    loaded = driver.execute_script(
+                        """
+                        const el = arguments[0];
+                        if (!el) return false;
+                        if (el.tagName && el.tagName.toLowerCase() === 'img') {
+                            return el.complete && el.naturalWidth > 0;
+                        }
+                        const img = el.querySelector && el.querySelector('img[src]');
+                        return !img || (img.complete && img.naturalWidth > 0);
+                        """,
+                        img_el,
+                    )
+                    if loaded:
+                        break
+                    time.sleep(0.2)
             except Exception:
                 pass  # Si no hay imagen o falla, seguimos
 
@@ -1840,15 +1915,22 @@ def take_item_screenshot(driver, item_index: int, out_path: str, logger=print) -
         return False
 
     try:
-        # Screenshot del viewport y recorte con Pillow
+        # 1. Obtener devicePixelRatio para corregir resoluciones (DPR)
+        try:
+            dpr = driver.execute_script("return window.devicePixelRatio || 1;")
+        except Exception:
+            dpr = 1.0
+
+        # 2. Screenshot del viewport y recorte con Pillow
         png = driver.get_screenshot_as_png()
         img = PILImage.open(io.BytesIO(png))
         img_w, img_h = img.size
 
-        l = max(0, int(left))
-        t = max(0, int(top))
-        r = min(img_w, int(left + width))
-        b = min(img_h, int(top + height))
+        # 3. Escalar las coordenadas CSS a píxeles físicos
+        l = max(0, int(left * dpr))
+        t = max(0, int(top * dpr))
+        r = min(img_w, int((left + width) * dpr))
+        b = min(img_h, int((top + height) * dpr))
 
         if r <= l or b <= t:
             logger(
