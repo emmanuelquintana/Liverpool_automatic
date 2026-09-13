@@ -93,20 +93,47 @@ class LiverpoolViewModel:
     def process_details_dry_run(self, selected_dates: List[str]):
         self._reset_cancel()
         self.service.process_details_dry_run(self.days, selected_dates)
+        try:
+            self.service.save_orders_to_json(self.days, AUTO_SAVE_PATH)
+        except Exception:
+            pass
         stats = self.get_batch_stats(selected_dates)
         self._record_history("process_dry_run", selected_dates, stats)
+
+    def process_missing_guides(self, excel_path: str) -> dict:
+        self._reset_cancel()
+        res = self.service.process_missing_guides_from_excel(Path(excel_path))
+        date_str = res.get("date", "")
+        self._record_history("check_missing_guides", [date_str] if date_str else [], {
+            "total": res.get("total", 0),
+            "ok": res.get("downloaded", 0),
+            "still_missing": res.get("still_missing", 0),
+        })
+        return res
 
     def accept_and_download_labels(self, selected_dates: List[str]):
         if not self.days:
             raise RuntimeError("Primero ejecuta el escaneo de órdenes (Fase 1).")
         self._reset_cancel()
         self.service.accept_and_download_labels(self.days, selected_dates)
+        self.service.save_orders_to_json(self.days, AUTO_SAVE_PATH)
         stats = self.get_batch_stats(selected_dates)
         self._record_history("accept_download", selected_dates, stats)
+
+    def upload_to_portal(self, selected_dates: List[str]) -> dict:
+        if not self.days:
+            raise RuntimeError("No hay pedidos cargados para enviar.")
+        from portal_client import upload_batches
+        return upload_batches(self.days, selected_dates)
 
     def merge_labels(self, selected_dates):
         self.service.merge_labels_for_dates(self.days, selected_dates)
         self._record_history("merge_labels", selected_dates)
+
+    def send_print_files_and_copy_guides(self, selected_dates: List[str]) -> dict:
+        result = self.service.send_print_files_and_copy_guides(selected_dates)
+        self._record_history("send_print_files", selected_dates, result)
+        return result
 
     def scan_old_orders_5_days_ago(self):
         from datetime import datetime, timedelta

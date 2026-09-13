@@ -23,7 +23,8 @@ from PIL import Image as PILImage
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 
-from models import AppConfig, DayBatch, Order, OrderItem
+from models import AppConfig, DayBatch, Order, OrderItem, ShipmentInfo
+from email_delivery import send_print_files_and_copy_guides
 import json
 import logging
 from config import (
@@ -92,7 +93,7 @@ class LiverpoolService:
     # ---------- Selenium driver ----------
 
     def _init_driver(self) -> webdriver.Edge:
-        """
+        r"""
         Inicializa Edge usando un perfil exclusivo para la automatización.
         - Usa un user-data-dir propio (C:\EdgeProfiles\LiverpoolAuto)
         - Reutiliza sesión después de la primera vez.
@@ -521,9 +522,14 @@ class LiverpoolService:
             except Exception:
                 qty_number = 1
 
+            sku_oferta = (raw.get("skuOferta") or "").strip()
+            talla = (raw.get("talla") or "").strip()
+
             item = OrderItem(
                 title=title,
                 qty=qty_number,
+                sku_oferta=sku_oferta,
+                talla=talla,
             )
             items.append(item)
 
@@ -893,6 +899,10 @@ class LiverpoolService:
             
             self._merge_labels_for_day(batch, day_dir, phase_label="F3")
 
+    def send_print_files_and_copy_guides(self, selected_dates: List[str]) -> dict:
+        """Envía el PDF *_print de cada fecha y copia sus guías unidas a imprimir."""
+        return send_print_files_and_copy_guides(self.config.base_dir, selected_dates, self.log)
+
     def _retry_missing_guides(
         self,
         batch: DayBatch,
@@ -956,6 +966,195 @@ class LiverpoolService:
             if local_driver:
                 driver.quit()
                 self.log("  [INFO] Navegador de reintentos cerrado.")
+
+    def process_missing_guides_from_excel(self, excel_path: Path) -> dict:
+        """
+        Toma el Excel de pedidos sin guía (GUIAS_FALTANTES_<fecha>.xlsx),
+        revisa en Liverpool si ya están listas las etiquetas, las descarga a <day_dir>/guias/<order_id>.pdf
+        y genera 2 archivos:
+          1) PDF con las guías faltantes que se acaban de descargar unidas (GUIAS_FALTANTES_UNIDAS_<fecha>.pdf).
+          2) PDF con las guías que ya se tenían y las nuevas unidas (GUIAS_<fecha>.pdf).
+        Actualiza el Excel con solo las que sigan pendientes si aplica.
+        """
+        import openpyxl
+        excel_path = Path(excel_path).resolve()
+        if not excel_path.exists():
+            raise FileNotFoundError(f"No existe el archivo: {excel_path}")
+
+        day_dir = excel_path.parent
+        guides_dir = day_dir / "guias"
+        guides_dir.mkdir(parents=True, exist_ok=True)
+
+        # Detectar fecha
+        m = re.search(r"(\d{4}-\d{2}-\d{2})", excel_path.name)
+        date_str = m.group(1) if m else day_dir.name
+
+        self.log(f"\n=== Procesando Guías Faltantes para fecha: {date_str} ===")
+        self.log(f"Leyendo Excel: {excel_path.name}")
+
+        wb = openpyxl.load_workbook(excel_path, data_only=True)
+        ws = wb.active
+
+        missing_orders: List[Dict[str, str]] = []
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if not row or not row[0]:
+                continue
+            oid = str(row[0]).strip()
+            if not oid or oid.lower().startswith("pedido"):
+                continue
+            url = str(row[1]).strip() if len(row) > 1 and row[1] else ""
+            if not url or not url.startswith("http"):
+                url = f"https://marketplace.liverpool.com.mx/orders/detail/{oid}"
+            missing_orders.append({"order_id": oid, "url": url})
+
+        if not missing_orders:
+            self.log("  [INFO] No se encontraron pedidos pendientes en el archivo.")
+            return {
+                "total": 0,
+                "downloaded": 0,
+                "still_missing": 0,
+                "file1": None,
+                "file2": None,
+                "date": date_str,
+            }
+
+        total = len(missing_orders)
+        self.log(f"  [INFO] Se encontraron {total} pedidos sin guía para revisar.")
+
+        # Registrar guías previas
+        previous_pdfs = {p.stem for p in guides_dir.glob("*.pdf") if not p.name.startswith("GUIAS_")}
+
+        download_dir = self.config.download_dir or (Path.home() / "Downloads")
+        download_dir.mkdir(parents=True, exist_ok=True)
+
+        driver = self._init_driver()
+        wait = WebDriverWait(driver, self._timeout)
+
+        downloaded_now: List[str] = []
+        still_missing: List[Dict[str, str]] = []
+
+        try:
+            for idx, item in enumerate(missing_orders, start=1):
+                if self._is_cancelled():
+                    self.log("  [INFO] Operación cancelada por el usuario.")
+                    still_missing.extend(missing_orders[idx - 1:])
+                    break
+
+                oid = item["order_id"]
+                url = item["url"]
+                self._notify_progress(idx, total, f"Revisando guía {oid}")
+                self.log(f"[{date_str}] Revisando guía {oid} ({idx}/{total})")
+
+                pdf_dest = guides_dir / f"{oid}.pdf"
+                if pdf_dest.exists() and pdf_dest.stat().st_size > 0:
+                    self.log(f"  [INFO] La guía de {oid} ya existía en la carpeta.")
+                    if oid not in previous_pdfs:
+                        downloaded_now.append(oid)
+                    continue
+
+                order_obj = Order(
+                    order_id=oid,
+                    url=url,
+                    fecha_clave=date_str,
+                    fecha_texto="",
+                    estado="",
+                )
+
+                try:
+                    self._accept_and_download_for_order(
+                        driver=driver,
+                        wait=wait,
+                        order=order_obj,
+                        day_dir=day_dir,
+                        download_dir=download_dir,
+                    )
+                except Exception as e:
+                    self.log(f"  [WARN] Error procesando pedido {oid}: {e}")
+
+                if pdf_dest.exists() and pdf_dest.stat().st_size > 0:
+                    self.log(f"  [OK] ¡Guía descargada exitosamente para {oid}!")
+                    downloaded_now.append(oid)
+                else:
+                    self.log(f"  [PENDIENTE] La guía de {oid} aún no está disponible en Liverpool.")
+                    still_missing.append(item)
+
+        finally:
+            self._cleanup_driver(driver)
+
+        # ── 1) Archivo 1: PDF con las guías faltantes unidas (las recién recuperadas) ──
+        file1_path = None
+        if downloaded_now:
+            file1_path = day_dir / f"GUIAS_FALTANTES_UNIDAS_{date_str}.pdf"
+            merger1 = PdfMerger()
+            count1 = 0
+            for oid in downloaded_now:
+                p = guides_dir / f"{oid}.pdf"
+                if p.exists() and p.stat().st_size > 0:
+                    try:
+                        merger1.append(str(p))
+                        count1 += 1
+                    except Exception as e:
+                        self.log(f"  [WARN] No se pudo unir {p.name} al Archivo 1: {e}")
+            if count1 > 0:
+                with open(file1_path, "wb") as f:
+                    merger1.write(f)
+                merger1.close()
+                self.log(f"  [ÉXITO] Archivo 1 generado ({count1} guías faltantes unidas): {file1_path}")
+            else:
+                merger1.close()
+                file1_path = None
+        else:
+            self.log("  [INFO] No se descargó ninguna guía nueva en esta revisión.")
+
+        # ── 2) Archivo 2: PDF con todas las guías unidas (las que ya se tenían + las nuevas) ──
+        file2_path = None
+        all_guide_files = [p for p in sorted(guides_dir.glob("*.pdf")) if not p.name.startswith("GUIAS_")]
+        if all_guide_files:
+            file2_path = day_dir / f"GUIAS_{date_str}.pdf"
+            merger2 = PdfMerger()
+            count2 = 0
+            for p in all_guide_files:
+                if p.stat().st_size > 0:
+                    try:
+                        merger2.append(str(p))
+                        count2 += 1
+                    except Exception as e:
+                        self.log(f"  [WARN] No se pudo unir {p.name} al Archivo 2: {e}")
+            if count2 > 0:
+                with open(file2_path, "wb") as f:
+                    merger2.write(f)
+                merger2.close()
+                self.log(f"  [ÉXITO] Archivo 2 generado ({count2} guías totales unidas): {file2_path}")
+            else:
+                merger2.close()
+                file2_path = None
+
+        # ── 3) Actualizar el Excel de pedidos sin guía ──
+        if still_missing:
+            wb_remain = Workbook()
+            ws_remain = wb_remain.active
+            ws_remain.title = "Faltantes"
+            ws_remain.append(["Pedido", "Link"])
+            ws_remain.column_dimensions["A"].width = 20
+            ws_remain.column_dimensions["B"].width = 80
+            for item in still_missing:
+                ws_remain.append([item["order_id"], item["url"]])
+                cell = ws_remain.cell(row=ws_remain.max_row, column=2)
+                cell.hyperlink = item["url"]
+                cell.style = "Hyperlink"
+            wb_remain.save(excel_path)
+            self.log(f"  [INFO] Excel de faltantes actualizado con {len(still_missing)} órdenes que aún siguen pendientes.")
+        else:
+            self.log("  [ÉXITO] ¡Todas las guías faltantes han sido descargadas!")
+
+        return {
+            "total": total,
+            "downloaded": len(downloaded_now),
+            "still_missing": len(still_missing),
+            "file1": str(file1_path) if file1_path else None,
+            "file2": str(file2_path) if file2_path else None,
+            "date": date_str,
+        }
 
     def process_old_orders_execution(self, days: Dict[str, DayBatch], selected_dates: List[str]):
         """
@@ -1268,6 +1467,8 @@ class LiverpoolService:
             except Exception as e:
                 self.log(f"  [WARN F2] Error al intentar aceptar el pedido: {e}")
 
+        self._capture_shipments_from_shipping_tab(driver, order)
+
         # Abrir pestaña 'Documentos'
         try:
             documentos_tab = wait.until(
@@ -1310,6 +1511,67 @@ class LiverpoolService:
             day_dir=day_dir,
             download_dir=download_dir,
         )
+
+    def _capture_shipments_from_shipping_tab(self, driver: webdriver.Edge, order: Order):
+        """Lee la tabla Envío de Liverpool; el rastreo posterior ocurre en el servidor."""
+        try:
+            tab = WebDriverWait(driver, 12).until(
+                EC.element_to_be_clickable((
+                    By.XPATH,
+                    "//button[contains(@class,'MuiTab-root') and normalize-space(.)='Envío']",
+                ))
+            )
+            driver.execute_script("arguments[0].click();", tab)
+            rows = WebDriverWait(driver, 12).until(
+                EC.presence_of_all_elements_located((
+                    By.XPATH,
+                    "//table[.//th[contains(normalize-space(.),'No. de rastreo')]]//tbody/tr",
+                ))
+            )
+        except Exception as e:
+            self.log(f"  [WARN F2] No se pudo leer la pestaña Envío: {e}")
+            return
+
+        shipments = []
+        for row in rows:
+            cells = row.find_elements(By.TAG_NAME, "td")
+            if len(cells) < 6:
+                continue
+            carrier = cells[0].text.strip().replace("_MKP", "")
+            tracking_number = cells[3].text.strip()
+            if not tracking_number:
+                continue
+            links = cells[5].find_elements(By.CSS_SELECTOR, "a[href]")
+            url = links[0].get_attribute("href") if links else self._tracking_url(carrier, tracking_number)
+            shipments.append(ShipmentInfo(
+                carrier=carrier,
+                guide_status=cells[1].text.strip(),
+                guide_type=cells[2].text.strip(),
+                tracking_number=tracking_number,
+                tracking_url=url,
+                logistics_charge_status=cells[4].text.strip(),
+            ))
+
+        if shipments:
+            order.shipments = shipments
+            self.log(f"  [OK F2] {len(shipments)} guía(s) capturada(s): {', '.join(s.tracking_number for s in shipments)}")
+        else:
+            self.log("  [WARN F2] Liverpool mostró Envío, pero no se encontró un número de rastreo.")
+
+    @staticmethod
+    def _tracking_url(carrier: str, tracking_number: str) -> str:
+        from urllib.parse import quote
+        guide = quote(tracking_number)
+        carrier = carrier.upper()
+        if "ESTAFETA" in carrier:
+            return f"https://cs.estafeta.com/es/Tracking/searchByGet?wayBill={guide}&isShipmentDetail=True"
+        if "UPS" in carrier:
+            return f"https://www.ups.com/track?loc=es_MX&tracknum={guide}"
+        if "DHL" in carrier:
+            return f"https://www.dhl.com/mx-es/home/rastreo.html?tracking-id={guide}&submit=1"
+        if "FEDEX" in carrier:
+            return f"https://www.fedex.com/apps/fedextrack/?tracknumbers={guide}&locale=es_MX&cntry_code=mx"
+        return ""
 
     def _download_label_pdf(
         self,
@@ -1583,6 +1845,15 @@ class LiverpoolService:
         pdf_path = day_dir / f"PEDIDOS_{batch.date}_print.pdf"
         self._generate_print_pdf(ok_orders, pdf_path)
         self.log(f"  PDF imprimible: {pdf_path}")
+
+        # Excel de ventas por modelo
+        try:
+            from models_manager import generate_models_sales_excel
+            models_excel_path = day_dir / f"VENTAS_MODELOS_{batch.date}.xlsx"
+            generate_models_sales_excel(batch, models_excel_path)
+            self.log(f"  Excel ventas por modelo: {models_excel_path}")
+        except Exception as e:
+            self.log(f"  [WARN] No se pudo generar Excel de ventas por modelo: {e}")
 
     def _generate_print_pdf(self, ok_orders: List[Order], pdf_path: Path):
         """

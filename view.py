@@ -11,7 +11,7 @@ from models import AppConfig
 from viewmodel import LiverpoolViewModel, AUTO_SAVE_PATH
 from dialogs import (
     show_info, show_success, show_warning, show_error, show_confirm,
-    show_settings, show_history,
+    show_settings, show_history, show_model_catalog,
 )
 from settings import save_settings
 
@@ -182,6 +182,12 @@ class MainScreen(ctk.CTkFrame):
         ).pack(side="left", padx=(0, 8))
 
         ctk.CTkButton(
+            toolbar, text="🏷️ Modelos",
+            command=lambda: show_model_catalog(self),
+            height=30, width=105, fg_color="#7d3c98", hover_color="#6c3483",
+        ).pack(side="left", padx=(0, 6))
+
+        ctk.CTkButton(
             toolbar, text="⚙ Config",
             command=lambda: show_settings(self, self.controller.config_obj),
             height=30, width=95, fg_color="#2c3e50", hover_color="#34495e",
@@ -242,7 +248,22 @@ class MainScreen(ctk.CTkFrame):
         self.btn_merge = ctk.CTkButton(
             self.actions_frame, text="4) Unir Guías PDF",
             command=self.on_merge_click, fg_color="#9b59b6", hover_color="#8e44ad", **btn_params)
-        self.btn_merge.pack(fill="x", padx=20, pady=(5, 10))
+        self.btn_merge.pack(fill="x", padx=20, pady=5)
+
+        self.btn_send_print = ctk.CTkButton(
+            self.actions_frame, text="✉ Enviar pedidos + copiar guías",
+            command=self.on_send_print_click, fg_color="#166534", hover_color="#14532d", **btn_params)
+        self.btn_send_print.pack(fill="x", padx=20, pady=5)
+
+        self.btn_missing_guides = ctk.CTkButton(
+            self.actions_frame, text="📦 Revisar Guías Faltantes",
+            command=self.on_check_missing_click, fg_color="#16a085", hover_color="#117864", **btn_params)
+        self.btn_missing_guides.pack(fill="x", padx=20, pady=5)
+
+        self.btn_upload_portal = ctk.CTkButton(
+            self.actions_frame, text="↑ Subir al portal",
+            command=self.on_upload_portal_click, fg_color="#2563eb", hover_color="#1d4ed8", **btn_params)
+        self.btn_upload_portal.pack(fill="x", padx=20, pady=(5, 10))
 
         # ── Progreso + Cancelar ──────────────────────────────────────────
         prog_outer = ctk.CTkFrame(self.actions_frame, fg_color="transparent")
@@ -279,7 +300,8 @@ class MainScreen(ctk.CTkFrame):
 
         self._action_buttons = [
             self.btn_scan, self.btn_process, self.btn_accept,
-            self.btn_auto_2_3, self.btn_merge, self.btn_scan_old, self.btn_process_old,
+            self.btn_auto_2_3, self.btn_merge, self.btn_send_print, self.btn_missing_guides, self.btn_upload_portal,
+            self.btn_scan_old, self.btn_process_old,
         ]
 
         # ── Columna derecha: Fechas ──────────────────────────────────────
@@ -566,6 +588,110 @@ class MainScreen(ctk.CTkFrame):
             stats = self.vm.get_batch_stats(selected_dates)
             msg = f"Fases 2 y 3 ejecutadas correctamente.\n\n{_stats_msg(stats)}"
             self.controller.after(0, lambda: show_success(self, "Proceso automático completado", msg))
+
+        self._run_action(_do, post_ui=_after)
+
+    def on_check_missing_click(self):
+        initial_dir = str(self.controller.config_obj.base_dir) if self.controller.config_obj.base_dir.exists() else None
+        filepath = filedialog.askopenfilename(
+            title="Seleccionar Excel de Guías Faltantes",
+            initialdir=initial_dir,
+            filetypes=[("Archivos Excel", "*.xlsx"), ("Todos los archivos", "*.*")]
+        )
+        if not filepath:
+            return
+
+        self.controller.append_log(f"=== Revisando Guías Faltantes desde: {filepath} ===")
+
+        result_holder = [None]
+
+        def _do():
+            result_holder[0] = self.vm.process_missing_guides(filepath)
+
+        def _after():
+            res = result_holder[0] or {}
+            total = res.get("total", 0)
+            downloaded = res.get("downloaded", 0)
+            still_missing = res.get("still_missing", 0)
+            f1 = res.get("file1")
+            f2 = res.get("file2")
+
+            msg_parts = [
+                f"Total de pedidos revisados: {total}",
+                f"Guías nuevas recuperadas: {downloaded}",
+            ]
+            if still_missing > 0:
+                msg_parts.append(f"Aún pendientes en Liverpool: {still_missing}")
+            else:
+                msg_parts.append("¡Todas las guías pendientes quedaron completas!")
+
+            if f1:
+                msg_parts.append(f"\n📄 Archivo 1 (nuevas unidas):\n{f1}")
+            if f2:
+                msg_parts.append(f"\n📚 Archivo 2 (todas unidas):\n{f2}")
+
+            full_msg = "\n".join(msg_parts)
+            self.controller.append_log("=== Proceso de Guías Faltantes Finalizado ===")
+            self.controller.append_log(full_msg)
+            self.controller.after(
+                0, lambda: show_success(self, "Revisión de Guías Faltantes", full_msg)
+            )
+
+        self._run_action(_do, post_ui=_after)
+
+    def on_upload_portal_click(self):
+        selected_dates = self._get_selected_dates()
+        if not selected_dates:
+            show_warning(self, "Sin fechas", "Selecciona al menos una fecha para subir al portal.")
+            return
+        result_holder = [None]
+        self.controller.append_log(f"=== Subiendo al portal: {', '.join(selected_dates)} ===")
+
+        def _do():
+            result_holder[0] = self.vm.upload_to_portal(selected_dates)
+
+        def _after():
+            result = result_holder[0]
+            if not result:
+                return
+            message = (
+                f"Pedidos recibidos: {result.get('imported_orders', 0)}\n"
+                f"Guías recibidas: {result.get('imported_shipments', 0)}"
+            )
+            self.controller.append_log(message)
+            self.controller.after(0, lambda: show_success(self, "Portal actualizado", message))
+
+        self._run_action(_do, post_ui=_after)
+
+    def on_send_print_click(self):
+        selected_dates = self._get_selected_dates()
+        if not selected_dates:
+            show_warning(self, "Sin fechas", "Selecciona al menos una fecha para enviar.")
+            return
+        if not show_confirm(
+            self,
+            "Confirmar envío",
+            f"Se enviará un PDF de pedidos por fecha a Cecilia y Almacén U4U, y las guías unidas se copiarán a imprimir.\n\nFechas: {', '.join(selected_dates)}\n\n¿Continuar?",
+        ):
+            return
+
+        result_holder = [None]
+        self.controller.append_log(f"=== Enviando pedidos para: {', '.join(selected_dates)} ===")
+
+        def _do():
+            result_holder[0] = self.vm.send_print_files_and_copy_guides(selected_dates)
+
+        def _after():
+            result = result_holder[0]
+            if not result:
+                return
+            recipients = ", ".join(result["recipients"])
+            message = (
+                f"{result['sent']} correo(s) enviado(s) a {recipients}.\n"
+                f"{result['copied']} archivo(s) de guías copiado(s) a la carpeta imprimir."
+            )
+            self.controller.append_log("=== Envío y copia completados ===")
+            self.controller.after(0, lambda: show_success(self, "Proceso completado", message))
 
         self._run_action(_do, post_ui=_after)
 

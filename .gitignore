@@ -47,3 +47,22 @@ chromedriver.exe
 # OS
 .DS_Store
 Thumbs.db
+
+# InsForge & AI agent skills
+.insforge
+.agent
+.agents
+.augment
+.claude
+.cline
+.github/copilot*
+.kilocode
+.qoder
+.qwen
+.roo
+.trae
+.windsurf
+
+# Local operational data
+orders_auto_save*.json
+history.json
