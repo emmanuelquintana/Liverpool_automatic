@@ -757,6 +757,38 @@ class LiverpoolService:
         finally:
             self._cleanup_driver(driver)
 
+    def sync_shipments(self, days: Dict[str, DayBatch], selected_dates: List[str]) -> dict:
+        """Abre Envío de cada pedido y actualiza sus guías sin aceptar ni descargar."""
+        orders = [
+            order
+            for date in selected_dates
+            for order in (days.get(date).orders if days.get(date) else [])
+        ]
+        if not orders:
+            raise RuntimeError("El JSON no contiene pedidos para revisar.")
+
+        driver = self._init_driver()
+        result = {"orders": len(orders), "orders_with_shipments": 0, "shipments": 0, "errors": 0}
+        try:
+            for index, order in enumerate(orders, start=1):
+                if self._is_cancelled():
+                    self.log("  [INFO] Sincronización cancelada por el usuario.")
+                    break
+                self._notify_progress(index, len(orders), f"Envío {order.order_id}")
+                self.log(f"[ENVÍO] Pedido {order.order_id} ({index}/{len(orders)})")
+                try:
+                    driver.get(order.url)
+                    self._check_and_handle_login(driver)
+                    count = self._capture_shipments_from_shipping_tab(driver, order)
+                    result["shipments"] += count
+                    result["orders_with_shipments"] += int(count > 0)
+                except Exception as error:
+                    result["errors"] += 1
+                    self.log(f"  [ERROR ENVÍO] Pedido {order.order_id}: {error}")
+        finally:
+            self._cleanup_driver(driver)
+        return result
+
     def reprocess_orders_execution(self, days: Dict[str, DayBatch], selected_dates: List[str]):
         """
         Reproceso de lista guardada:
@@ -1529,8 +1561,8 @@ class LiverpoolService:
                 ))
             )
         except Exception as e:
-            self.log(f"  [WARN F2] No se pudo leer la pestaña Envío: {e}")
-            return
+            self.log(f"  [WARN ENVÍO] No se pudo leer la pestaña Envío: {e}")
+            return 0
 
         shipments = []
         for row in rows:
@@ -1554,9 +1586,10 @@ class LiverpoolService:
 
         if shipments:
             order.shipments = shipments
-            self.log(f"  [OK F2] {len(shipments)} guía(s) capturada(s): {', '.join(s.tracking_number for s in shipments)}")
+            self.log(f"  [OK ENVÍO] {len(shipments)} guía(s) capturada(s): {', '.join(s.tracking_number for s in shipments)}")
         else:
-            self.log("  [WARN F2] Liverpool mostró Envío, pero no se encontró un número de rastreo.")
+            self.log("  [WARN ENVÍO] Liverpool mostró Envío, pero no se encontró un número de rastreo.")
+        return len(shipments)
 
     @staticmethod
     def _tracking_url(carrier: str, tracking_number: str) -> str:

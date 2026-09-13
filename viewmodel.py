@@ -126,6 +126,13 @@ class LiverpoolViewModel:
         from portal_client import upload_batches
         return upload_batches(self.days, selected_dates)
 
+    def sync_shipments(self, selected_dates: List[str]) -> dict:
+        self._reset_cancel()
+        result = self.service.sync_shipments(self.days, selected_dates)
+        self.service.save_orders_to_json(self.days, AUTO_SAVE_PATH)
+        self._record_history("sync_shipments", selected_dates, result)
+        return result
+
     def merge_labels(self, selected_dates):
         self.service.merge_labels_for_dates(self.days, selected_dates)
         self._record_history("merge_labels", selected_dates)

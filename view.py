@@ -199,6 +199,20 @@ class MainScreen(ctk.CTkFrame):
             height=30, width=105, fg_color="#1a5276", hover_color="#21618c",
         ).pack(side="left", padx=(0, 6))
 
+        self.btn_sync_shipments = ctk.CTkButton(
+            toolbar, text="🚚 Leer envíos",
+            command=self.on_sync_shipments_click,
+            height=30, width=120, fg_color="#0f766e", hover_color="#115e59",
+        )
+        self.btn_sync_shipments.pack(side="left", padx=(0, 6))
+
+        self.btn_upload_portal = ctk.CTkButton(
+            toolbar, text="↑ Subir portal",
+            command=self.on_upload_portal_click,
+            height=30, width=115, fg_color="#2563eb", hover_color="#1d4ed8",
+        )
+        self.btn_upload_portal.pack(side="left", padx=(0, 6))
+
         # Tema toggle
         initial_icon = "☀" if ctk.get_appearance_mode() == "Light" else "🌙"
         self.btn_theme = ctk.CTkButton(
@@ -260,11 +274,6 @@ class MainScreen(ctk.CTkFrame):
             command=self.on_check_missing_click, fg_color="#16a085", hover_color="#117864", **btn_params)
         self.btn_missing_guides.pack(fill="x", padx=20, pady=5)
 
-        self.btn_upload_portal = ctk.CTkButton(
-            self.actions_frame, text="↑ Subir al portal",
-            command=self.on_upload_portal_click, fg_color="#2563eb", hover_color="#1d4ed8", **btn_params)
-        self.btn_upload_portal.pack(fill="x", padx=20, pady=(5, 10))
-
         # ── Progreso + Cancelar ──────────────────────────────────────────
         prog_outer = ctk.CTkFrame(self.actions_frame, fg_color="transparent")
         prog_outer.pack(fill="x", padx=20, pady=(0, 10))
@@ -300,7 +309,8 @@ class MainScreen(ctk.CTkFrame):
 
         self._action_buttons = [
             self.btn_scan, self.btn_process, self.btn_accept,
-            self.btn_auto_2_3, self.btn_merge, self.btn_send_print, self.btn_missing_guides, self.btn_upload_portal,
+            self.btn_auto_2_3, self.btn_merge, self.btn_send_print, self.btn_missing_guides,
+            self.btn_sync_shipments, self.btn_upload_portal,
             self.btn_scan_old, self.btn_process_old,
         ]
 
@@ -660,6 +670,42 @@ class MainScreen(ctk.CTkFrame):
             )
             self.controller.append_log(message)
             self.controller.after(0, lambda: show_success(self, "Portal actualizado", message))
+
+        self._run_action(_do, post_ui=_after)
+
+    def on_sync_shipments_click(self):
+        if not os.path.exists(AUTO_SAVE_PATH):
+            show_warning(self, "JSON no encontrado", f"No existe:\n{AUTO_SAVE_PATH}")
+            return
+        self.vm.load_orders_json(AUTO_SAVE_PATH)
+        self.refresh_dates_checkboxes()
+        selected_dates = list(self.vm.days)
+        total = sum(len(batch.orders) for batch in self.vm.days.values())
+        if not total or not show_confirm(
+            self, "Leer información de envío",
+            f"Se abrirán {total} pedidos guardados para consultar la pestaña Envío.\n"
+            "No se aceptarán pedidos ni se descargarán archivos.\n\n¿Continuar?",
+        ):
+            return
+
+        result_holder = [None]
+        self.controller.append_log(f"=== Consultando Envío en {total} pedidos del JSON ===")
+
+        def _do():
+            result_holder[0] = self.vm.sync_shipments(selected_dates)
+
+        def _after():
+            result = result_holder[0]
+            if not result:
+                return
+            message = (
+                f"Pedidos revisados: {result['orders']}\n"
+                f"Pedidos con guía: {result['orders_with_shipments']}\n"
+                f"Guías encontradas: {result['shipments']}\n"
+                f"Errores: {result['errors']}"
+            )
+            self.controller.append_log("=== Información de envío guardada en orders_auto_save.json ===")
+            self.controller.after(0, lambda: show_success(self, "Envíos actualizados", message))
 
         self._run_action(_do, post_ui=_after)
 
