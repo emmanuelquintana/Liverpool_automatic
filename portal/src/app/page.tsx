@@ -8,6 +8,7 @@ import {
   PackageSearch,
   RefreshCw,
   Route,
+  LogOut,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ManifestTable } from "@/components/manifest-table";
@@ -80,6 +81,11 @@ async function Dashboard() {
             <small>Próximo ciclo cada 15 min</small>
           </span>
         </div>
+        <form className="logout-form" action="/api/logout" method="post">
+          <button className="nav-link logout-button" type="submit">
+            <LogOut aria-hidden="true" /> Cerrar sesión
+          </button>
+        </form>
       </aside>
 
       <main id="inicio" className="main-canvas">

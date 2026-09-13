@@ -1,15 +1,16 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { SESSION_COOKIE, verifySession } from "@/lib/session";
 
-export function proxy(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const user = process.env.PORTAL_USER;
   const password = process.env.PORTAL_PASSWORD;
   if (!user || !password) return NextResponse.next();
-  const auth = request.headers.get("authorization");
-  if (auth?.startsWith("Basic ")) {
-    const [suppliedUser, suppliedPassword] = atob(auth.slice(6)).split(":", 2);
-    if (suppliedUser === user && suppliedPassword === password) return NextResponse.next();
-  }
-  return new NextResponse("Autenticación requerida", { status: 401, headers: { "WWW-Authenticate": 'Basic realm="Liverpool Seguimiento Goldval", charset="UTF-8"' } });
+  if (request.nextUrl.pathname === "/login" || request.nextUrl.pathname === "/api/login") return NextResponse.next();
+  const secret = process.env.PORTAL_TOKEN ?? password;
+  if (await verifySession(request.cookies.get(SESSION_COOKIE)?.value, secret)) return NextResponse.next();
+  const login = new URL("/login", request.url);
+  if (request.nextUrl.pathname !== "/") login.searchParams.set("next", `${request.nextUrl.pathname}${request.nextUrl.search}`);
+  return NextResponse.redirect(login);
 }
 
 export const config = { matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"] };

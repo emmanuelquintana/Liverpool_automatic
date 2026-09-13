@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test:session": "node src/lib/session.test.ts",
     "bones": "boneyard-js build http://localhost:3000 --force"
   },
   "dependencies": {
