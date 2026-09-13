@@ -1,0 +1,298 @@
+{
+    "BARCELONA": {
+        "aliases": [
+            "BARCELONA",
+            "BCN",
+            "COPO26BCN"
+        ],
+        "colors": [
+            {
+                "name": "NEGRO",
+                "code": "01"
+            },
+            {
+                "name": "MARINO",
+                "code": "04"
+            },
+            {
+                "name": "BLANCO",
+                "code": "03"
+            },
+            {
+                "name": "VINO",
+                "code": "15"
+            }
+        ],
+        "sizes": [
+            "CH",
+            "M",
+            "G",
+            "XG"
+        ]
+    },
+    "JAPON": {
+        "aliases": [
+            "JAPON",
+            "JPN",
+            "COPO26JPN"
+        ],
+        "colors": [
+            {
+                "name": "NEGRO",
+                "code": "01"
+            },
+            {
+                "name": "MARINO",
+                "code": "04"
+            },
+            {
+                "name": "BLANCO",
+                "code": "03"
+            },
+            {
+                "name": "ROJO",
+                "code": "02"
+            }
+        ],
+        "sizes": [
+            "CH",
+            "M",
+            "G",
+            "XG"
+        ]
+    },
+    "MIAMI": {
+        "aliases": [
+            "MIAMI",
+            "MIA",
+            "COPO26MIA"
+        ],
+        "colors": [
+            {
+                "name": "NEGRO",
+                "code": "01"
+            },
+            {
+                "name": "BLANCO",
+                "code": "03"
+            },
+            {
+                "name": "MARINO",
+                "code": "04"
+            },
+            {
+                "name": "VERDE",
+                "code": "17"
+            }
+        ],
+        "sizes": [
+            "CH",
+            "M",
+            "G",
+            "XG"
+        ]
+    },
+    "CANADA": {
+        "aliases": [
+            "CANADA",
+            "CAN",
+            "COPO26CAN"
+        ],
+        "colors": [
+            {
+                "name": "NEGRO",
+                "code": "01"
+            },
+            {
+                "name": "ROJO",
+                "code": "02"
+            },
+            {
+                "name": "BLANCO",
+                "code": "03"
+            }
+        ],
+        "sizes": [
+            "CH",
+            "M",
+            "G",
+            "XG"
+        ]
+    },
+    "MONACO": {
+        "aliases": [
+            "MONACO",
+            "MON",
+            "COPO26MON"
+        ],
+        "colors": [
+            {
+                "name": "BLANCO",
+                "code": "03"
+            },
+            {
+                "name": "MARINO",
+                "code": "04"
+            },
+            {
+                "name": "NEGRO",
+                "code": "01"
+            }
+        ],
+        "sizes": [
+            "CH",
+            "M",
+            "G",
+            "XG"
+        ]
+    },
+    "MEXICO": {
+        "aliases": [
+            "MEXICO",
+            "MEX",
+            "COPO26MEX",
+            "CC-MEX"
+        ],
+        "colors": [
+            {
+                "name": "NEGRO",
+                "code": "01"
+            },
+            {
+                "name": "BLANCO",
+                "code": "03"
+            },
+            {
+                "name": "VERDE",
+                "code": "17"
+            }
+        ],
+        "sizes": [
+            "CH",
+            "M",
+            "G",
+            "XG"
+        ]
+    },
+    "NETHERLANDS": {
+        "aliases": [
+            "NETHERLANDS",
+            "NED",
+            "HOLANDA",
+            "CC-NED"
+        ],
+        "colors": [
+            {
+                "name": "NARANJA",
+                "code": "09"
+            },
+            {
+                "name": "NEGRO",
+                "code": "01"
+            }
+        ],
+        "sizes": [
+            "CH",
+            "M",
+            "G",
+            "XG"
+        ]
+    },
+    "24H LE MANS": {
+        "aliases": [
+            "24H",
+            "LE MANS",
+            "24H-101"
+        ],
+        "colors": [
+            {
+                "name": "NEGRO",
+                "code": "01"
+            },
+            {
+                "name": "BLANCO",
+                "code": "03"
+            },
+            {
+                "name": "MARINO",
+                "code": "04"
+            },
+            {
+                "name": "ROJO",
+                "code": "02"
+            }
+        ],
+        "sizes": [
+            "CH",
+            "M",
+            "G",
+            "XG"
+        ]
+    },
+    "MX RACING 102": {
+        "aliases": [
+            "MXR-24-102",
+            "102"
+        ],
+        "colors": [
+            {
+                "name": "NEGRO",
+                "code": "01"
+            },
+            {
+                "name": "ROJO",
+                "code": "02"
+            },
+            {
+                "name": "BLANCO",
+                "code": "03"
+            },
+            {
+                "name": "MARINO",
+                "code": "04"
+            }
+        ],
+        "sizes": [
+            "CH",
+            "M",
+            "G",
+            "XG"
+        ]
+    },
+    "GORRA ALFA ROMEO": {
+        "aliases": [
+            "AR-CAP",
+            "26910",
+            "ALFA ROMEO"
+        ],
+        "colors": [
+            {
+                "name": "NEGRO",
+                "code": "01"
+            },
+            {
+                "name": "ROJO",
+                "code": "02"
+            },
+            {
+                "name": "BLANCO",
+                "code": "03"
+            },
+            {
+                "name": "MARINO",
+                "code": "04"
+            },
+            {
+                "name": "GRIS",
+                "code": "07"
+            },
+            {
+                "name": "GRIS OSCURO",
+                "code": "07O"
+            }
+        ],
+        "sizes": [
+            "Unitalla"
+        ]
+    }
+}

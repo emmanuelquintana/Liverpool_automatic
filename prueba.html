@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tic-Tac-Toe Pro ✨</title>
+    <style>
+        /* ==================================== */
+        /* 🎨 CSS: Estilos y Animaciones */
+        /* ==================================== */
+        :root {
+            --board-bg: #2c3e50; /* Azul pizarra oscuro */
+            --cell-bg: #34495e; /* Azul más oscuro para las celdas */
+            --x-color: #e74c3c; /* Rojo intenso para X */
+            --o-color: #3498db; /* Azul vibrante para O */
+            --text-color: #ecf0f1; /* Gris claro para el texto */
+            --win-glow: #f1c40f; /* Amarillo/Dorado para victoria */
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 40px 20px;
+            background-color: #212f3e; /* Fondo muy oscuro */
+            color: var(--text-color);
+            min-height: 100vh;
+        }
+
+        h1 {
+            font-size: 2.5em;
+            margin-bottom: 20px;
+            color: #ecf0f1;
+            text-shadow: 0 0 10px rgba(0, 150, 255, 0.5);
+        }
+
+        /* Contenedor principal del tablero para centrarlo */
+        .game-board {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            grid-template-rows: repeat(3, 1fr);
+            gap: 10px; /* Espaciado entre celdas */
+            background-color: #2c3e50; /* Fondo ligeramente más oscuro */
+            padding: 10px;
+            border-radius: 10px;
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.5);
+        }
+
+        .cell {
+            background-color: #34495e;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 3rem; /* Tamaño de la X o O */
+            cursor: pointer;
+            transition: background-color 0.3s, transform 0.1s;
+            border-radius: 8px;
+            user-select: none; /* Evita la selección de texto */
+        }
+
+        .cell:hover:not([data-value]) {
+            background-color: #4a647a;
+            transform: scale(1.02);
+        }
+
+        /* Estilos para X y O */
+        .cell[data-value="X"] {
+            color: #e74c3c; /* Rojo */
+            font-weight: 900;
+        }
+
+        .cell[data-value="O"] {
+            color: #3498db; /* Azul */
+            font-weight: 900;
+        }
+
+        .message {
+            margin-top: 20px;
+            font-size: 1.2rem;
+            color: #ecf0f1;
+            min-height: 1.5em; /* Reserva espacio para el mensaje */
+        }
+
+        button {
+            padding: 10px 20px;
+            background-color: #2ecc71;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 1rem;
+            transition: background-color 0.3s;
+            margin-top: 10px;
+        }
+
+        button:hover {
+            background-color: #27ae60;
+        }
+    }
+}
+</style>
+</head>
+<body>
+
+<div class="game-container">
+    <h1>Tic-Tac-Toe (Gato vs. Humano)</h1>
+
+    <div class="game-board" id="gameBoard">
+        <!-- Las 9 celdas serán generadas por JavaScript -->
+    </div>
+
+    <div class="message" id="message">Turno de X</div>
+    <button id="restartButton">Reiniciar Juego</button>
+</div>
+
+<script>
+    const gameBoard = document.getElementById('gameBoard');
+    const messageDisplay = document.getElementById('message');
+    const restartButton = document.getElementById('restartButton');
+
+    let boardState = Array(9).fill(null);
+    let currentPlayer = 'X'; // X comienza siempre
+    let gameActive = true;
+
+    // Constantes de juego
+    const WINNING_COMBINATIONS = [
+        [0, 1, 2], [3, 4, 5], [6, 7, 8], // Filas
+        [0, 3, 6], [1, 4, 7], [2, 5, 8], // Columnas
+        [0, 4, 8], [2, 4, 6]  // Diagonales
+    ];
+
+    // -------------------
+    // 1. Inicialización del Tablero
+    // -------------------
+
+    function initializeBoard() {
+        gameBoard.innerHTML = ''; // Limpiar el tablero
+        boardState.fill(null);
+        currentPlayer = 'X';
+        gameActive = true;
+        messageDisplay.textContent = 'Turno de X';
+
+        for (let i = 0; i < 9; i++) {
+            const cell = document.createElement('div');
+            cell.classList.add('cell');
+            cell.dataset.index = i;
+            cell.dataset.value = '';
+            cell.addEventListener('click', handleCellClick);
+            gameBoard.appendChild(cell);
+        }
+    }
+
+    // -------------------
+    // 2. Manejo de Clicks
+    // -------------------
+
+    function handleCellClick(event) {
+        const clickedCell = event.target;
+        const index = parseInt(clickedCell.dataset.index);
+
+        // Verificar si la celda ya tiene valor o si el juego no está activo
+        if (boardState[index] !== null || !gameActive) {
+            return;
+        }
+
+        // 1. Actualizar el estado y la UI
+        boardState[index] = currentPlayer;
+        clickedCell.dataset.value = currentPlayer;
+        clickedCell.textContent = currentPlayer;
+
+        // 2. Verificar el resultado
+        if (checkWin()) {
+            messageDisplay.textContent = `${currentPlayer} ha ganado la partida!`;
+            messageDisplay.style.color = '#e74c3c';
+            gameActive = false;
+        } else if (checkDraw()) {
+            messageDisplay.textContent = '¡Es un empate!';
+            messageDisplay.style.color = '#f39c12';
+            gameActive = false;
+        } else {
+            // 3. Cambiar turno y mensaje
+            changePlayer();
+        }
+    }
+
+    // -------------------
+    // 3. Lógica del Juego
+    // -------------------
+
+    function changePlayer() {
+        currentPlayer = currentPlayer === 'X' ? 'O' : 'X';
+        messageDisplay.textContent = `Turno de ${currentPlayer}`;
+        messageDisplay.style.color = (currentPlayer === 'X' ? '#e74c3c' : '#3498db');
+    }
+
+    function checkWin() {
+        for (const combination of WINNING_COMBINATIONS) {
+            const [a, b, c] = combination;
+            if (boardState[a] && boardState[a] === boardState[b] && boardState[a] === boardState[c]) {
+                // Almacenar las combinaciones ganadoras para resaltar visualmente
+                gameBoard.querySelectorAll('.cell')[a].style.backgroundColor = '#2ecc71';
+                gameBoard.querySelectorAll('.cell')[b].style.backgroundColor = '#2ecc71';
+                gameBoard.querySelectorAll('.cell')[c].style.backgroundColor = '#2ecc71';
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function checkDraw() {
+        return boardState.every(cell => cell !== null);
+    }
+
+    // -------------------
+    // 4. Event Listeners y Ejecución
+    // -------------------
+    
+    // Botón de reinicio
+    restartButton.addEventListener('click', initializeBoard);
+
+    // Iniciar el juego al cargar la página
+    initializeBoard();
+</script>
+
+</body>
+</html>

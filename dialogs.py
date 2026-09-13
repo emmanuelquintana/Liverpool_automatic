@@ -319,6 +319,7 @@ _EVENT_LABELS = {
     "merge_labels": "Unir PDFs",
     "process_old": "Antiguos",
     "reprocess": "Reproceso",
+    "check_missing_guides": "Guías Faltantes",
 }
 
 
@@ -393,4 +394,258 @@ class HistoryDialog(ctk.CTkToplevel):
 
 def show_history(parent):
     dlg = HistoryDialog(parent)
+    parent.wait_window(dlg)
+
+
+# ──────────────────────────────────────────────
+#  Diálogo de Catálogo de Modelos
+# ──────────────────────────────────────────────
+
+class ModelCatalogDialog(ctk.CTkToplevel):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Catálogo de Modelos")
+        self.geometry("840x620")
+        self.minsize(700, 500)
+        self.grab_set()
+        self.lift()
+        self.focus_force()
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+
+        from models_manager import load_catalog, save_catalog
+        self._load_catalog_fn = load_catalog
+        self._save_catalog_fn = save_catalog
+        self.catalog = self._load_catalog_fn()
+        self._editing_model = None
+
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+
+        # Header
+        top_frame = ctk.CTkFrame(self, fg_color="transparent")
+        top_frame.grid(row=0, column=0, sticky="ew", padx=20, pady=(15, 8))
+        ctk.CTkLabel(
+            top_frame,
+            text="🏷️ Catálogo de Modelos Registrados",
+            font=("Roboto Medium", 17),
+        ).pack(side="left")
+
+        # Contenedor central
+        mid_container = ctk.CTkFrame(self, fg_color="transparent")
+        mid_container.grid(row=1, column=0, sticky="nsew", padx=20, pady=5)
+        mid_container.grid_columnconfigure(0, weight=3)
+        mid_container.grid_columnconfigure(1, weight=2)
+        mid_container.grid_rowconfigure(0, weight=1)
+
+        # Izquierda: Lista de modelos
+        list_box = ctk.CTkFrame(mid_container, corner_radius=8)
+        list_box.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        list_box.grid_rowconfigure(1, weight=1)
+        list_box.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            list_box,
+            text="Modelos en catálogo:",
+            font=("Roboto Medium", 13),
+        ).grid(row=0, column=0, sticky="w", padx=15, pady=(10, 5))
+
+        self.models_scroll = ctk.CTkScrollableFrame(list_box)
+        self.models_scroll.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        self.models_scroll.grid_columnconfigure(0, weight=1)
+
+        # Derecha: Formulario
+        self.form_box = ctk.CTkFrame(mid_container, corner_radius=8)
+        self.form_box.grid(row=0, column=1, sticky="nsew")
+        self.form_box.grid_columnconfigure(0, weight=1)
+
+        self.lbl_form = ctk.CTkLabel(
+            self.form_box,
+            text="➕ Registrar Nuevo Modelo",
+            font=("Roboto Medium", 14),
+        )
+        self.lbl_form.pack(anchor="w", padx=15, pady=(12, 8))
+
+        ctk.CTkLabel(self.form_box, text="Nombre del Modelo:", font=("Roboto", 12)).pack(anchor="w", padx=15, pady=(4, 2))
+        self.entry_name = ctk.CTkEntry(self.form_box, placeholder_text="Ej: BARCELONA")
+        self.entry_name.pack(fill="x", padx=15, pady=(0, 6))
+
+        ctk.CTkLabel(self.form_box, text="Alias / Claves SKU (separados por coma):", font=("Roboto", 12)).pack(anchor="w", padx=15, pady=(4, 2))
+        self.entry_aliases = ctk.CTkEntry(self.form_box, placeholder_text="Ej: BCN, BARCELONA, COPO26BCN")
+        self.entry_aliases.pack(fill="x", padx=15, pady=(0, 6))
+
+        ctk.CTkLabel(self.form_box, text="Colores (Formato NOMBRE:CODIGO):", font=("Roboto", 12)).pack(anchor="w", padx=15, pady=(4, 2))
+        self.entry_colors = ctk.CTkEntry(self.form_box, placeholder_text="NEGRO:01, MARINO:04, BLANCO:03, VINO:15")
+        self.entry_colors.pack(fill="x", padx=15, pady=(0, 6))
+
+        ctk.CTkLabel(self.form_box, text="Tallas (separadas por coma):", font=("Roboto", 12)).pack(anchor="w", padx=15, pady=(4, 2))
+        self.entry_sizes = ctk.CTkEntry(self.form_box, placeholder_text="CH, M, G, XG")
+        self.entry_sizes.pack(fill="x", padx=15, pady=(0, 10))
+
+        btn_row = ctk.CTkFrame(self.form_box, fg_color="transparent")
+        btn_row.pack(fill="x", padx=15, pady=(5, 10))
+
+        self.btn_save_model = ctk.CTkButton(
+            btn_row, text="Guardar Modelo", command=self._save_form_model,
+            fg_color="#27ae60", hover_color="#1e8449",
+        )
+        self.btn_save_model.pack(side="left", fill="x", expand=True, padx=(0, 5))
+
+        self.btn_clear_form = ctk.CTkButton(
+            btn_row, text="Limpiar", command=self._clear_form,
+            fg_color="#555", hover_color="#666", width=70,
+        )
+        self.btn_clear_form.pack(side="right")
+
+        # Bottom row
+        bottom_row = ctk.CTkFrame(self, fg_color="transparent")
+        bottom_row.grid(row=2, column=0, sticky="ew", padx=20, pady=(10, 15))
+
+        ctk.CTkButton(
+            bottom_row, text="Cerrar", command=self.destroy,
+            fg_color="#555", hover_color="#666", width=100,
+        ).pack(side="right")
+
+        self._refresh_list()
+        self.update_idletasks()
+        self._center(parent)
+
+    def _refresh_list(self):
+        for w in self.models_scroll.winfo_children():
+            w.destroy()
+
+        if not self.catalog:
+            ctk.CTkLabel(self.models_scroll, text="(No hay modelos registrados)", text_color="gray").pack(pady=20)
+            return
+
+        for m_name, m_data in list(self.catalog.items()):
+            card = ctk.CTkFrame(self.models_scroll, corner_radius=6, fg_color=("#f0f0f0", "#2b2b2b"))
+            card.pack(fill="x", pady=4, padx=2)
+
+            header_card = ctk.CTkFrame(card, fg_color="transparent")
+            header_card.pack(fill="x", padx=8, pady=(6, 2))
+
+            ctk.CTkLabel(header_card, text=m_name, font=("Roboto Medium", 13)).pack(side="left")
+
+            btn_del = ctk.CTkButton(
+                header_card, text="🗑", width=28, height=24,
+                fg_color="#c0392b", hover_color="#96281b",
+                command=lambda name=m_name: self._delete_model(name)
+            )
+            btn_del.pack(side="right", padx=(4, 0))
+
+            btn_edit = ctk.CTkButton(
+                header_card, text="✏️", width=28, height=24,
+                fg_color="#2980b9", hover_color="#2471a3",
+                command=lambda name=m_name: self._load_into_form(name)
+            )
+            btn_edit.pack(side="right")
+
+            colors_str = ", ".join([f"{c['name']} ({c['code']})" for c in m_data.get("colors", [])])
+            sizes_str = ", ".join(m_data.get("sizes", []))
+            aliases_str = ", ".join(m_data.get("aliases", []))
+
+            info_text = f"Alias: {aliases_str or '-'}\nColores: {colors_str}\nTallas: {sizes_str}"
+            ctk.CTkLabel(
+                card, text=info_text, font=("Roboto", 11),
+                justify="left", anchor="w", text_color=("gray30", "gray70")
+            ).pack(anchor="w", padx=10, pady=(0, 6))
+
+    def _load_into_form(self, model_name: str):
+        m_data = self.catalog.get(model_name)
+        if not m_data:
+            return
+        self._editing_model = model_name
+        self.lbl_form.configure(text=f"✏️ Editar: {model_name}")
+        self.entry_name.delete(0, tk.END)
+        self.entry_name.insert(0, model_name)
+
+        self.entry_aliases.delete(0, tk.END)
+        self.entry_aliases.insert(0, ", ".join(m_data.get("aliases", [])))
+
+        colors_list = [f"{c['name']}:{c['code']}" for c in m_data.get("colors", [])]
+        self.entry_colors.delete(0, tk.END)
+        self.entry_colors.insert(0, ", ".join(colors_list))
+
+        self.entry_sizes.delete(0, tk.END)
+        self.entry_sizes.insert(0, ", ".join(m_data.get("sizes", [])))
+
+    def _clear_form(self):
+        self._editing_model = None
+        self.lbl_form.configure(text="➕ Registrar Nuevo Modelo")
+        self.entry_name.delete(0, tk.END)
+        self.entry_aliases.delete(0, tk.END)
+        self.entry_colors.delete(0, tk.END)
+        self.entry_sizes.delete(0, tk.END)
+
+    def _save_form_model(self):
+        name = self.entry_name.get().strip().upper()
+        if not name:
+            show_warning(self, "Campo requerido", "Ingresa el nombre del modelo.")
+            return
+
+        aliases_raw = self.entry_aliases.get().strip()
+        aliases = [a.strip().upper() for a in aliases_raw.split(",") if a.strip()]
+        if name not in aliases:
+            aliases.insert(0, name)
+
+        colors_raw = self.entry_colors.get().strip()
+        colors = []
+        if colors_raw:
+            for part in colors_raw.split(","):
+                part = part.strip()
+                if not part:
+                    continue
+                if ":" in part:
+                    c_name, c_code = part.split(":", 1)
+                    colors.append({"name": c_name.strip().upper(), "code": c_code.strip()})
+                else:
+                    colors.append({"name": part.strip().upper(), "code": "01"})
+        else:
+            colors = [
+                {"name": "NEGRO", "code": "01"},
+                {"name": "MARINO", "code": "04"},
+                {"name": "BLANCO", "code": "03"},
+                {"name": "VINO", "code": "15"},
+            ]
+
+        sizes_raw = self.entry_sizes.get().strip()
+        sizes = [s.strip().upper() for s in sizes_raw.split(",") if s.strip()]
+        if not sizes:
+            sizes = ["CH", "M", "G", "XG"]
+
+        if self._editing_model and self._editing_model != name:
+            self.catalog.pop(self._editing_model, None)
+
+        self.catalog[name] = {
+            "aliases": aliases,
+            "colors": colors,
+            "sizes": sizes,
+        }
+
+        self._save_catalog_fn(self.catalog)
+        self._clear_form()
+        self._refresh_list()
+        show_info(self, "Guardado", f"Modelo '{name}' guardado correctamente en el catálogo.")
+
+    def _delete_model(self, model_name: str):
+        if show_confirm(self, "Eliminar Modelo", f"¿Deseas eliminar el modelo '{model_name}' del catálogo?"):
+            self.catalog.pop(model_name, None)
+            self._save_catalog_fn(self.catalog)
+            if self._editing_model == model_name:
+                self._clear_form()
+            self._refresh_list()
+
+    def _center(self, parent):
+        dw, dh = self.winfo_width(), self.winfo_height()
+        try:
+            x = parent.winfo_rootx() + (parent.winfo_width() - dw) // 2
+            y = parent.winfo_rooty() + (parent.winfo_height() - dh) // 2
+        except Exception:
+            x = (self.winfo_screenwidth() - dw) // 2
+            y = (self.winfo_screenheight() - dh) // 2
+        self.geometry(f"+{x}+{y}")
+
+
+def show_model_catalog(parent):
+    dlg = ModelCatalogDialog(parent)
     parent.wait_window(dlg)
