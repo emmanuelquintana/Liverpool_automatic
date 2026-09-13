@@ -199,10 +199,17 @@ class MainScreen(ctk.CTkFrame):
             height=30, width=105, fg_color="#1a5276", hover_color="#21618c",
         ).pack(side="left", padx=(0, 6))
 
+        self.btn_load_shipments_json = ctk.CTkButton(
+            toolbar, text="📂 Cargar JSON",
+            command=self.on_load_shipments_json_click,
+            height=30, width=115, fg_color="#475569", hover_color="#334155",
+        )
+        self.btn_load_shipments_json.pack(side="left", padx=(0, 6))
+
         self.btn_sync_shipments = ctk.CTkButton(
-            toolbar, text="🚚 Leer envíos",
+            toolbar, text="🚚 Procesar envíos",
             command=self.on_sync_shipments_click,
-            height=30, width=120, fg_color="#0f766e", hover_color="#115e59",
+            height=30, width=135, fg_color="#0f766e", hover_color="#115e59",
         )
         self.btn_sync_shipments.pack(side="left", padx=(0, 6))
 
@@ -310,7 +317,7 @@ class MainScreen(ctk.CTkFrame):
         self._action_buttons = [
             self.btn_scan, self.btn_process, self.btn_accept,
             self.btn_auto_2_3, self.btn_merge, self.btn_send_print, self.btn_missing_guides,
-            self.btn_sync_shipments, self.btn_upload_portal,
+            self.btn_load_shipments_json, self.btn_sync_shipments, self.btn_upload_portal,
             self.btn_scan_old, self.btn_process_old,
         ]
 
@@ -673,23 +680,31 @@ class MainScreen(ctk.CTkFrame):
 
         self._run_action(_do, post_ui=_after)
 
-    def on_sync_shipments_click(self):
+    def on_load_shipments_json_click(self):
         if not os.path.exists(AUTO_SAVE_PATH):
             show_warning(self, "JSON no encontrado", f"No existe:\n{AUTO_SAVE_PATH}")
             return
         self.vm.load_orders_json(AUTO_SAVE_PATH)
         self.refresh_dates_checkboxes()
-        selected_dates = list(self.vm.days)
         total = sum(len(batch.orders) for batch in self.vm.days.values())
-        if not total or not show_confirm(
+        self.controller.append_log(f"JSON cargado: {total} pedidos. Selecciona las fechas a procesar.")
+        show_success(self, "JSON cargado", f"{total} pedidos disponibles.\nAhora selecciona las fechas que quieres procesar.")
+
+    def on_sync_shipments_click(self):
+        selected_dates = self._get_selected_dates()
+        if not selected_dates:
+            show_warning(self, "Sin fechas", "Primero carga el JSON y selecciona al menos una fecha.")
+            return
+        total = sum(len(self.vm.days[date].orders) for date in selected_dates if date in self.vm.days)
+        if not show_confirm(
             self, "Leer información de envío",
-            f"Se abrirán {total} pedidos guardados para consultar la pestaña Envío.\n"
+            f"Se abrirán {total} pedidos de {len(selected_dates)} fecha(s) para consultar la pestaña Envío.\n"
             "No se aceptarán pedidos ni se descargarán archivos.\n\n¿Continuar?",
         ):
             return
 
         result_holder = [None]
-        self.controller.append_log(f"=== Consultando Envío en {total} pedidos del JSON ===")
+        self.controller.append_log(f"=== Consultando Envío para: {', '.join(selected_dates)} ===")
 
         def _do():
             result_holder[0] = self.vm.sync_shipments(selected_dates)

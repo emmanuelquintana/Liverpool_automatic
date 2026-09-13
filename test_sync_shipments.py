@@ -27,7 +27,10 @@ def capture(_driver, order):
 
 
 service._capture_shipments_from_shipping_tab = capture
-days = {"2026-09-13": DayBatch("2026-09-13", [Order("123", "https://example.com/123", "2026-09-13", "", "")])}
+days = {
+    "2026-09-13": DayBatch("2026-09-13", [Order("123", "https://example.com/123", "2026-09-13", "", "")]),
+    "2026-09-12": DayBatch("2026-09-12", [Order("999", "https://example.com/999", "2026-09-12", "", "")]),
+}
 result = service.sync_shipments(days, ["2026-09-13"])
 assert result == {"orders": 1, "orders_with_shipments": 1, "shipments": 1, "errors": 0}
 assert driver.urls == ["https://example.com/123"]
