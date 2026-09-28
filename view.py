@@ -62,7 +62,7 @@ class LiverpoolApp(ctk.CTk):
         self.container.pack(side="top", fill="both", expand=True)
 
         self.frames = {}
-        for F in (MainScreen, ReprocessScreen):
+        for F in (MainScreen, ReprocessScreen, ManualGuidesScreen):
             page_name = F.__name__
             frame = F(parent=self.container, controller=self)
             self.frames[page_name] = frame
@@ -213,6 +213,13 @@ class MainScreen(ctk.CTkFrame):
         )
         self.btn_sync_shipments.pack(side="left", padx=(0, 6))
 
+        self.btn_review_guides = ctk.CTkButton(
+            toolbar, text="🔎 Revisar guías",
+            command=lambda: self.controller.show_frame("ManualGuidesScreen"),
+            height=30, width=125, fg_color="#7e22ce", hover_color="#6b21a8",
+        )
+        self.btn_review_guides.pack(side="left", padx=(0, 6))
+
         self.btn_upload_portal = ctk.CTkButton(
             toolbar, text="↑ Subir portal",
             command=self.on_upload_portal_click,
@@ -301,16 +308,16 @@ class MainScreen(ctk.CTkFrame):
 
         # ── Separador + Antiguos ──────────────────────────────────────────
         ctk.CTkFrame(self.actions_frame, height=2, fg_color="gray").pack(fill="x", padx=10, pady=5)
-        ctk.CTkLabel(self.actions_frame, text="Antiguos (hace 5 días)",
+        ctk.CTkLabel(self.actions_frame, text="Atrasados (últimos 5 días)",
                      font=("Roboto Medium", 14)).pack(pady=(0, 5))
 
         self.btn_scan_old = ctk.CTkButton(
-            self.actions_frame, text="5) Escanear Antiguos",
+            self.actions_frame, text="5) Escanear sin Enviados",
             command=self.on_scan_old_click, fg_color="#7f8c8d", hover_color="#95a5a6", **btn_params)
         self.btn_scan_old.pack(fill="x", padx=20, pady=5)
 
         self.btn_process_old = ctk.CTkButton(
-            self.actions_frame, text="6) Procesar Antiguos",
+            self.actions_frame, text="6) Procesar Atrasados",
             command=self.on_process_old_click, fg_color="#6c7a89", hover_color="#bdc3c7", **btn_params)
         self.btn_process_old.pack(fill="x", padx=20, pady=(5, 15))
 
@@ -368,7 +375,7 @@ class MainScreen(ctk.CTkFrame):
                       fg_color="#555", hover_color="#666", corner_radius=6
                       ).grid(row=0, column=2, sticky="e")
 
-        self.log_text = ctk.CTkTextbox(self.log_frame, height=150, font=("Consolas", 12))
+        self.log_text = ctk.CTkTextbox(self.log_frame, height=90, font=("Consolas", 12))
         self.log_text.grid(row=1, column=0, sticky="nsew", padx=15, pady=(0, 15))
 
         ctk.CTkLabel(self, text="Desarrollado por Jose Emmanuel Quintana Torres",
@@ -389,17 +396,25 @@ class MainScreen(ctk.CTkFrame):
         self.btn_cancel.configure(state="normal", text="⏹ Detener")
         self.progress_bar.set(0)
         self.progress_label.configure(text="Iniciando...", text_color="gray")
+        succeeded = [False]
+
+        def _run():
+            action_fn(*args)
+            succeeded[0] = True
 
         def _finish():
             self._set_buttons_enabled(True)
             self.btn_cancel.configure(state="disabled", text="⏹ Detener")
+            if not succeeded[0]:
+                self.progress_label.configure(text="Error ✗", text_color="#e74c3c")
+                return
             self.progress_bar.set(1.0)
             self.progress_label.configure(text="Completado ✔", text_color="#2ecc71")
             _play_done_sound()
             if post_ui:
                 post_ui()
 
-        self.controller.run_in_thread(action_fn, *args, on_finish=_finish)
+        self.controller.run_in_thread(_run, on_finish=_finish)
 
     def update_progress(self, current: int, total: int, label: str = ""):
         if total > 0:
@@ -776,7 +791,7 @@ class MainScreen(ctk.CTkFrame):
         self._run_action(_do, post_ui=_after)
 
     def on_scan_old_click(self):
-        self.controller.append_log("=== Escaneando pedidos antiguos (5 días antes) ===")
+        self.controller.append_log("=== Escaneando atrasados de los últimos 5 días (sin Enviados) ===")
         result_holder = [None]
 
         def _do_wrapper():
@@ -794,19 +809,19 @@ class MainScreen(ctk.CTkFrame):
     def on_process_old_click(self):
         selected_dates = self._get_selected_dates()
         if not selected_dates:
-            show_warning(self, "Sin fechas", "Selecciona al menos una fecha para procesar antiguos.")
+            show_warning(self, "Sin fechas", "Selecciona al menos una fecha para procesar atrasados.")
             return
-        self.controller.append_log(f"=== Procesando Antiguos para: {', '.join(selected_dates)} ===")
+        self.controller.append_log(f"=== Procesando Atrasados para: {', '.join(selected_dates)} ===")
 
         def _do():
             self.vm.process_old_orders_execution(selected_dates)
 
         def _after():
-            self.controller.append_log("=== Proceso de Antiguos completado ===")
+            self.controller.append_log("=== Proceso de Atrasados completado ===")
             stats = self.vm.get_batch_stats(selected_dates)
             msg = f"Screenshots y guías procesadas.\n\n{_stats_msg(stats)}"
             self.controller.after(
-                0, lambda: show_success(self, "Proceso de antiguos completado", msg))
+                0, lambda: show_success(self, "Proceso de atrasados completado", msg))
 
         self._run_action(_do, post_ui=_after)
 
@@ -1047,3 +1062,315 @@ class ReprocessScreen(ctk.CTkFrame):
                 0, lambda: show_success(self, "Reproceso completado", msg))
 
         self.controller.run_in_thread(_do, on_finish=_finish)
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  ManualGuidesScreen
+# ══════════════════════════════════════════════════════════════════════
+
+class ManualGuidesScreen(ctk.CTkFrame):
+    """
+    Revisa con el navegador de esta máquina las guías que el portal no puede leer.
+
+    El portal entrega un JSON con las guías pendientes, aquí se abren una por una en
+    Edge para leer la barra de avance de la paquetería, y el mismo archivo se guarda
+    con el estado de cada una para volver a subirlo en el portal.
+    """
+
+    def __init__(self, parent, controller):
+        super().__init__(parent)
+        self.controller = controller
+        self.vm = controller.vm
+        self._document: dict = {}
+        self._guides: list = []
+        self._status_vars: dict = {}
+        self._action_buttons: list = []
+        self._build_ui()
+
+    # ------------------------------------------------------------------
+    # UI
+    # ------------------------------------------------------------------
+
+    def _build_ui(self):
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+
+        self.header = ctk.CTkFrame(self, corner_radius=10)
+        self.header.grid(row=0, column=0, sticky="ew", padx=20, pady=20)
+
+        ctk.CTkLabel(
+            self.header, text="Revisar Guías Manualmente (Navegador)",
+            font=("Roboto Medium", 18)
+        ).pack(pady=(10, 0))
+
+        ctk.CTkLabel(
+            self.header,
+            text="Descarga el JSON desde el portal (Seguimientos → Descargar guías), revísalo aquí y súbelo de vuelta.",
+            font=("Roboto", 11), text_color="gray"
+        ).pack(pady=(2, 8))
+
+        btns = ctk.CTkFrame(self.header, fg_color="transparent")
+        btns.pack(fill="x", padx=20, pady=(0, 5))
+
+        self.btn_load = ctk.CTkButton(
+            btns, text="📂 Cargar JSON del portal", command=self.on_load_json,
+            fg_color="#f39c12", hover_color="#e67e22", width=190,
+        )
+        self.btn_load.pack(side="left", padx=(0, 6))
+
+        self.btn_review = ctk.CTkButton(
+            btns, text="🌐 Revisar con navegador", command=self.on_review_click,
+            fg_color="#8e44ad", hover_color="#732d91", width=185,
+        )
+        self.btn_review.pack(side="left", padx=(0, 6))
+
+        self.btn_save = ctk.CTkButton(
+            btns, text="💾 Guardar JSON revisado", command=self.on_save_click,
+            fg_color="#16a085", hover_color="#1abc9c", width=185,
+        )
+        self.btn_save.pack(side="left", padx=(0, 6))
+
+        self.btn_back = ctk.CTkButton(
+            btns, text="← Volver", command=lambda: self.controller.show_frame("MainScreen"),
+            fg_color="gray", width=90,
+        )
+        self.btn_back.pack(side="right", padx=10)
+
+        self._action_buttons = [self.btn_load, self.btn_review, self.btn_save]
+
+        prog_frame = ctk.CTkFrame(self.header, fg_color="transparent")
+        prog_frame.pack(fill="x", padx=20, pady=(5, 10))
+
+        self.progress_bar = ctk.CTkProgressBar(prog_frame, height=8, corner_radius=4)
+        self.progress_bar.set(0)
+        self.progress_bar.pack(fill="x", pady=(0, 5))
+
+        prog_row = ctk.CTkFrame(prog_frame, fg_color="transparent")
+        prog_row.pack(fill="x")
+        prog_row.grid_columnconfigure(0, weight=1)
+
+        self.progress_label = ctk.CTkLabel(
+            prog_row, text="Sin guías cargadas", font=("Roboto", 11),
+            text_color="gray", anchor="w")
+        self.progress_label.grid(row=0, column=0, sticky="w")
+
+        self.btn_cancel = ctk.CTkButton(
+            prog_row, text="⏹ Detener", command=self._on_cancel_click,
+            fg_color="#c0392b", hover_color="#96281b",
+            width=100, height=28, font=("Roboto", 11), corner_radius=6, state="disabled")
+        self.btn_cancel.grid(row=0, column=1, padx=(10, 0))
+
+        self.list_frame = ctk.CTkFrame(self)
+        self.list_frame.grid(row=1, column=0, sticky="nsew", padx=20, pady=(0, 20))
+        self.list_frame.grid_rowconfigure(1, weight=1)
+        self.list_frame.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            self.list_frame, text="Guías por revisar", font=("Roboto Medium", 14)
+        ).grid(row=0, column=0, sticky="w", padx=10, pady=5)
+
+        self.guides_scroll = ctk.CTkScrollableFrame(self.list_frame)
+        self.guides_scroll.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        self.guides_scroll.grid_columnconfigure(0, weight=1)
+
+        self._refresh_guides()
+
+    def _set_buttons_enabled(self, enabled: bool):
+        state = "normal" if enabled else "disabled"
+        for btn in self._action_buttons:
+            btn.configure(state=state)
+
+    def _on_cancel_click(self):
+        self.vm.request_cancel()
+        self.btn_cancel.configure(state="disabled", text="Cancelando...")
+        self.progress_label.configure(text="Cancelando...", text_color="#e67e22")
+
+    def _refresh_guides(self):
+        for widget in self.guides_scroll.winfo_children():
+            widget.destroy()
+        self._status_vars.clear()
+
+        if not self._guides:
+            ctk.CTkLabel(
+                self.guides_scroll,
+                text="Carga el JSON que descargaste del portal para empezar.",
+                text_color="gray",
+            ).pack(pady=20)
+            return
+
+        from guide_review import STATUS_LABELS
+
+        options = ["(sin revisar)"] + [STATUS_LABELS[key] for key in STATUS_LABELS]
+        for index, guide in enumerate(self._guides):
+            row = ctk.CTkFrame(self.guides_scroll, corner_radius=8)
+            row.pack(fill="x", padx=5, pady=4)
+            row.grid_columnconfigure(1, weight=1)
+
+            ctk.CTkLabel(
+                row, text=f"{guide.get('carrier', '')}\n#{guide.get('order_id', '')}",
+                font=("Roboto Medium", 11), width=110, justify="left", anchor="w",
+            ).grid(row=0, column=0, rowspan=2, padx=(12, 8), pady=8, sticky="w")
+
+            ctk.CTkLabel(
+                row, text=guide.get("tracking_number", ""), font=("Consolas", 12), anchor="w",
+            ).grid(row=0, column=1, sticky="w", pady=(8, 0))
+
+            detail = guide.get("detalle_revisado") or guide.get("detalle_actual") or ""
+            ctk.CTkLabel(
+                row, text=detail[:110], font=("Roboto", 10), text_color="gray", anchor="w",
+            ).grid(row=1, column=1, sticky="w", pady=(0, 8))
+
+            current = guide.get("estado_revisado", "")
+            var = tk.StringVar(value=STATUS_LABELS.get(current, "(sin revisar)"))
+            self._status_vars[index] = var
+            ctk.CTkOptionMenu(
+                row, values=options, variable=var, width=155,
+                command=lambda choice, i=index: self._on_status_change(i, choice),
+            ).grid(row=0, column=2, rowspan=2, padx=6, pady=8)
+
+            ctk.CTkButton(
+                row, text="Abrir", width=62, height=28, font=("Roboto", 11),
+                fg_color="#475569", hover_color="#334155",
+                command=lambda g=guide: self._open_in_browser(g),
+            ).grid(row=0, column=3, rowspan=2, padx=(0, 12), pady=8)
+
+    def _on_status_change(self, index: int, choice: str):
+        from guide_review import STATUS_LABELS
+
+        reverse = {label: key for key, label in STATUS_LABELS.items()}
+        guide = self._guides[index]
+        guide["estado_revisado"] = reverse.get(choice, "")
+        if guide["estado_revisado"] and not guide.get("detalle_revisado"):
+            guide["detalle_revisado"] = "Revisada a mano en la app"
+
+    def _open_in_browser(self, guide: dict):
+        import webbrowser
+
+        url = guide.get("tracking_url") or ""
+        if not url:
+            show_warning(self, "Sin liga", "Esta guía no trae liga de rastreo.")
+            return
+        webbrowser.open(url)
+
+    def update_progress(self, current: int, total: int, label: str = ""):
+        if total > 0:
+            self.progress_bar.set(current / total)
+        txt = f"{label}  ({current}/{total})" if label else f"Revisando {current}/{total}"
+        self.progress_label.configure(text=txt, text_color="white")
+
+    # ------------------------------------------------------------------
+    # Handlers
+    # ------------------------------------------------------------------
+
+    def on_load_json(self):
+        from guide_review import load_guides
+
+        filepath = filedialog.askopenfilename(
+            title="Seleccionar JSON de guías del portal",
+            filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")],
+        )
+        if not filepath:
+            return
+        try:
+            self._document, self._guides = load_guides(filepath)
+        except Exception as error:
+            show_error(self, "Error de carga", f"No se pudo leer el archivo:\n{error}")
+            return
+        self._refresh_guides()
+        self.progress_bar.set(0)
+        self.progress_label.configure(
+            text=f"{len(self._guides)} guías cargadas", text_color="gray")
+        self.controller.append_log(f"Guías por revisar cargadas: {len(self._guides)} ({filepath})")
+
+    def on_review_click(self):
+        if not self._guides:
+            show_warning(self, "Sin guías", "Primero carga el JSON que descargaste del portal.")
+            return
+
+        self._set_buttons_enabled(False)
+        self.btn_cancel.configure(state="normal", text="⏹ Detener")
+        self.progress_bar.set(0)
+        self.progress_label.configure(text="Abriendo navegador...", text_color="gray")
+        self.vm._reset_cancel()
+
+        def _do():
+            self._review_all()
+
+        def _finish():
+            self._set_buttons_enabled(True)
+            self.btn_cancel.configure(state="disabled", text="⏹ Detener")
+            self._refresh_guides()
+            revisadas = sum(1 for guide in self._guides if guide.get("estado_revisado"))
+            self.progress_bar.set(1.0)
+            self.progress_label.configure(
+                text=f"Revisadas {revisadas} de {len(self._guides)}", text_color="#2ecc71")
+            _play_done_sound()
+            self.controller.after(0, lambda: show_success(
+                self, "Revisión terminada",
+                f"Se leyeron {revisadas} de {len(self._guides)} guías.\n\n"
+                "Corrige a mano las que haga falta y guarda el JSON revisado."))
+
+        self.controller.run_in_thread(_do, on_finish=_finish)
+
+    def _review_all(self):
+        from guide_review import review_guide
+
+        service = self.vm.service
+        total = len(self._guides)
+        driver = None
+        try:
+            driver = service._init_driver()
+            for index, guide in enumerate(self._guides, start=1):
+                if self.vm._cancel_event.is_set():
+                    self.controller.append_log("  [INFO] Revisión cancelada por el usuario.")
+                    break
+                tracking_number = guide.get("tracking_number", "")
+                self.controller.after(
+                    0, lambda i=index, t=total, n=tracking_number: self.update_progress(i, t, n))
+                try:
+                    status, detail = review_guide(driver, guide)
+                except Exception as error:
+                    status, detail = "", f"Error al leer: {error}"
+                if status:
+                    guide["estado_revisado"] = status
+                    guide["detalle_revisado"] = detail
+                    self.controller.append_log(f"  [OK] {tracking_number}: {detail}")
+                else:
+                    self.controller.append_log(f"  [--] {tracking_number}: {detail or 'sin estado legible'}")
+        except Exception as error:
+            self.controller.append_log(f"  [ERROR] No se pudo revisar: {error}")
+        finally:
+            if driver is not None:
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
+
+    def on_save_click(self):
+        from guide_review import save_guides
+
+        if not self._guides:
+            show_warning(self, "Sin guías", "No hay nada que guardar.")
+            return
+        revisadas = sum(1 for guide in self._guides if guide.get("estado_revisado"))
+        if not revisadas:
+            show_warning(self, "Sin revisar", "Ninguna guía tiene estado revisado todavía.")
+            return
+
+        ts = datetime.now().strftime("%Y-%m-%d_%H-%M")
+        filepath = filedialog.asksaveasfilename(
+            title="Guardar JSON revisado como...", defaultextension=".json",
+            initialfile=f"guias-revisadas_{ts}.json",
+            filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")],
+        )
+        if not filepath:
+            return
+        try:
+            save_guides(filepath, self._document, self._guides)
+        except Exception as error:
+            show_error(self, "Error al guardar", f"No se pudo guardar el archivo:\n{error}")
+            return
+        self.controller.append_log(f"JSON revisado guardado: {filepath}")
+        show_success(
+            self, "Archivo guardado",
+            f"{revisadas} guías revisadas.\n\nSúbelo en el portal:\nSeguimientos → Subir revisadas")
